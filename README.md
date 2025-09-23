@@ -93,7 +93,7 @@ mode: single
 ```
 
 ## Notes:
-- After placing an instance of the card with a new device, zone rectangle must be drawn before 
+- After placing an instance of the card with a new device, zone rectangle must be drawn before zone state entities are created and can be added to dashboards
 - The `device` value is slugified (lowercase, spaces → underscores) to locate coordinate sensors: `sensor.zone_mapper_<slug(device)>_zone_<id>_coords`.
 - Example: `device: "Office"` → `sensor.zone_mapper_office_zone_1_coords`.
 
