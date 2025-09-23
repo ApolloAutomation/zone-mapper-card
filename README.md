@@ -149,5 +149,3 @@ data:
 - The backend is a standard Home Assistant custom component (binary_sensor + sensor platforms, custom services).
 
 ## License
-
-MIT
