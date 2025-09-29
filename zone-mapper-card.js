@@ -179,14 +179,17 @@ class ZoneMapperCard extends HTMLElement {
   attachEventListeners() {
     const zoneButtons = this.shadowRoot.getElementById('zone-buttons');
     zoneButtons.addEventListener('click', (e) => {
-        if (e.target.id === 'clearBtn') {
-            this.zones = [];
-            this.drawGrid();
-            this.updateZoneList();
-            this.zoneConfig.forEach(zone => {
-                this.updateHomeAssistant(zone.id, 0, 0, 0, 0);
-            });
-        }
+      const t = e.target;
+      if (!t) return;
+      if (t.id === 'clearBtn') {
+        this.zones = [];
+        this.drawGrid();
+        this.updateZoneList();
+        this.zoneConfig.forEach(zone => {
+          // Send nulls so backend stores "no zone drawn"
+          this.updateHomeAssistant(zone.id, null, null, null, null);
+        });
+      }
     });
 
     // Mouse/touch events
@@ -301,11 +304,9 @@ class ZoneMapperCard extends HTMLElement {
       const state = this._hass.states[entityId];
       if (state && state.attributes) {
         const { x_min, x_max, y_min, y_max } = state.attributes;
-        if (
-          x_min !== undefined && x_max !== undefined &&
-          y_min !== undefined && y_max !== undefined &&
-          (x_min !== 0 || x_max !== 0 || y_min !== 0 || y_max !== 0)
-        ) {
+        const vals = [x_min, x_max, y_min, y_max];
+        const allNumbers = vals.every(v => typeof v === 'number' && isFinite(v));
+        if (allNumbers) {
           const existingZone = this.zones.find(z => z.id === zoneConf.id);
           const newZone = { id: zoneConf.id, x_min, x_max, y_min, y_max };
           if (existingZone) {
