@@ -505,7 +505,7 @@ class ZoneMapperCard extends HTMLElement {
     const phiR = halfFovRad;
 
     // Apply rotation; positive rotates to device's right
-    const rotRad = (-this.coneAngleDeg * Math.PI) / 180;
+    const rotRad = (this.coneAngleDeg * Math.PI) / 180;
     let thetaStart = phiL + rotRad;
     let thetaEnd = phiR + rotRad;
     if (thetaStart > thetaEnd) {
@@ -522,8 +522,6 @@ class ZoneMapperCard extends HTMLElement {
     const R = pAt(thetaEnd);
     const lx = this.valueToPixels(L.x, 'x');
     const ly = this.valueToPixels(L.y, 'y');
-    const rx = this.valueToPixels(R.x, 'x');
-    const ry = this.valueToPixels(R.y, 'y');
 
     // Build filled sector: apex -> left ray -> arc -> right ray -> apex
     const segments = 48;
