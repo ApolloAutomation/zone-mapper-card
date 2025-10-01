@@ -11,7 +11,7 @@ A custom Lovelace card for Home Assistant that lets you draw 2D detection zones 
 - Color-coded zones and target dots
 - Mobile-friendly drawing (mouse + touch supported)
 - Configurable grid ranges (default X: -5000..5000 mm, Y: 0..10000 mm)
-- Helper overlay (device “view cone”) to aid placement
+- Helper overlay (device “view cone”) showing a configurable horizontal FOV (default 120° total, i.e., ±60°) to aid placement
 
 ## Requirements
 
@@ -53,7 +53,19 @@ zones:           # add or remove zones as needed
     name: Zone 2
   - id: 3
     name: Zone 3
-entities:        # tracked target entities (pairs of x/y)
+
+# Optional: override grid ranges (mm)
+grid:
+  x_min: -5000
+  x_max: 5000
+  y_min: 0
+  y_max: 10000
+cone:
+  y_max: 6000     # max range (radius) to display, in mm
+  fov_deg: 120    # total horizontal FOV in degrees (e.g., 120 => ±60°)
+  angle_deg: 0    # initial rotation (-180..180)
+
+entities:
   - x1: sensor.device_target_1_x
   - y1: sensor.device_target_1_y
   - x2: sensor.device_target_2_x
@@ -102,7 +114,9 @@ mode: single
 - Select a zone via its button, then click/touch and drag on the grid to draw the rectangle.
 - Release to save. The card calls `zone_mapper.update_zone`; the backend stores the coordinates.
 - Use “Clear All Zones” to reset all zones (also updates backend to zeros for each configured zone).
+- Double-click a zone button to clear just that zone (sends nulls for that zone only).
 - Target dots are drawn in different colors using the current X/Y sensor values.
+- Rotate the helper “device cone” with the slider (-180..180). You can also set an initial angle via `cone.angle_deg` and a total FOV via `cone.fov_deg` in the YAML. The cone displays ±(fov_deg/2); adjust `cone.y_max` to change the displayed range.
 
 ## Mobile and touch support
 

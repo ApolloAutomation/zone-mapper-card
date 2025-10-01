@@ -14,6 +14,13 @@ class ZoneMapperCard extends HTMLElement {
     this.xMax = 5000;
     this.yMin = 0;
     this.yMax = 10000;
+
+  // Helper device FOV overlay settings
+  // coneYMax is the displayed range (mm). FOV is total degrees (default 120° => ±60°).
+  this.coneYMax = 6000;
+  this.coneFovDeg = 120;
+  this.coneAngleDeg = 0;
+  this.coneAngleDefault = 0;
   }
 
   // Default stub config
@@ -26,11 +33,24 @@ class ZoneMapperCard extends HTMLElement {
         { id: 2, name: 'Zone 2' },
         { id: 3, name: 'Zone 3' },
       ],
+      grid: {
+        x_min: -5000,
+        x_max: 5000,
+        y_min: 0,
+        y_max: 10000,
+      },
+      cone: {
+        y_max: 6000,
+        fov_deg: 120,
+        angle_deg: 0,
+      },
       entities: [
         { x1: 'sensor.device_target_1_x' },
         { y1: 'sensor.device_target_1_y' },
         { x2: 'sensor.device_target_2_x' },
         { y2: 'sensor.device_target_2_y' },
+        { x3: 'sensor.device_target_3_x' },
+        { y3: 'sensor.device_target_3_y' },
       ],
     };
   }
@@ -48,11 +68,32 @@ class ZoneMapperCard extends HTMLElement {
     this.zoneConfig = config.zones;
     this.trackedEntities = this.processEntityConfig(config.entities);
 
-    // Allow overriding ranges
-    if (config.x_min_mm !== undefined) this.xMin = config.x_min_mm;
-    if (config.x_max_mm !== undefined) this.xMax = config.x_max_mm;
-    if (config.y_min_mm !== undefined) this.yMin = config.y_min_mm;
-    if (config.y_max_mm !== undefined) this.yMax = config.y_max_mm;
+    if (config.grid && typeof config.grid === 'object') {
+      const g = config.grid;
+      if (g.x_min !== undefined) this.xMin = g.x_min;
+      if (g.x_max !== undefined) this.xMax = g.x_max;
+      if (g.y_min !== undefined) this.yMin = g.y_min;
+      if (g.y_max !== undefined) this.yMax = g.y_max;
+    }
+
+    if (config.cone && typeof config.cone === 'object') {
+      const c = config.cone;
+      if (c.y_max !== undefined) this.coneYMax = c.y_max;
+      if (c.fov_deg !== undefined) {
+        const f = Number(c.fov_deg);
+        this.coneFovDeg = Number.isFinite(f) ? Math.max(1, Math.min(360, f)) : 120;
+      }      
+      if (c.angle_deg !== undefined) {
+        this.coneAngleDefault = Number(c.angle_deg) || 0;
+        this.coneAngleDeg = this.coneAngleDefault;
+      }
+    }
+
+    // ensure mins <= maxs
+    if (this.xMin > this.xMax) [this.xMin, this.xMax] = [this.xMax, this.xMin];
+    if (this.yMin > this.yMax) [this.yMin, this.yMax] = [this.yMax, this.yMin];
+    if (this.coneAngleDeg < -180) this.coneAngleDeg = -180;
+    if (this.coneAngleDeg > 180) this.coneAngleDeg = 180;
     
     this.render();
   }
@@ -90,12 +131,13 @@ class ZoneMapperCard extends HTMLElement {
   render() {
     this.shadowRoot.innerHTML = `
       <style>
-        /* Styles omitted for brevity, they are mostly unchanged */
         :host { display: block; padding: 16px; }
         .container { background: var(--card-background-color); border-radius: var(--ha-card-border-radius); box-shadow: var(--ha-card-box-shadow); padding: 16px; }
         .canvas-container { position: relative; width: 100%; aspect-ratio: 1; border: 2px solid var(--divider-color); border-radius: 4px; overflow: hidden; background: #fafafa; }
-  canvas { width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
+        canvas { width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
         .controls { margin-top: 16px; display: flex; gap: 8px; flex-wrap: wrap; }
+        #cone-controls { align-items: center; }
+        #coneAngleSlider { flex: 1; min-width: 360px; }
         button { padding: 8px 16px; background: var(--primary-color); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
         button:hover { opacity: 0.9; }
         button.zone-btn { background: var(--primary-color); }
@@ -118,6 +160,11 @@ class ZoneMapperCard extends HTMLElement {
           <canvas id="zoneCanvas"></canvas>
         </div>
         <div class="controls" id="zone-buttons">
+        </div>
+        <div class="controls" id="cone-controls">
+          <label for="coneAngleSlider">Cone rotation: </label>
+          <input type="range" id="coneAngleSlider" min="-180" max="180" step="1" value="${this.coneAngleDeg}" />
+          <span id="coneAngleLabel">${this.coneAngleDeg}°</span>
         </div>
         <div class="info">
           Click and drag to draw a zone. Units: mm (X: ${this.xMin}..${this.xMax}, Y: ${this.yMin}..${this.yMax})
@@ -146,6 +193,17 @@ class ZoneMapperCard extends HTMLElement {
         this.shadowRoot.querySelectorAll('.zone-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         this.selectedZone = zone.id;
+      });
+      btn.addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        const zoneId = zone.id;
+        const idx = this.zones.findIndex(z => String(z.id) === String(zoneId));
+        if (idx !== -1) {
+          this.zones.splice(idx, 1);
+        }
+        this.updateHomeAssistant(zoneId, null, null, null, null);
+        this.drawGrid();
+        this.updateZoneList();
       });
       container.appendChild(btn);
     });
@@ -199,6 +257,26 @@ class ZoneMapperCard extends HTMLElement {
     this.canvas.addEventListener('touchstart', (e) => { e.preventDefault(); this.startDrawing(e); }, { passive: false });
     this.canvas.addEventListener('touchmove', (e) => { e.preventDefault(); this.draw(e); }, { passive: false });
     this.canvas.addEventListener('touchend', (e) => { e.preventDefault(); this.endDrawing(e); }, { passive: false });
+
+    // Cone rotation slider
+    const angleSlider = this.shadowRoot.getElementById('coneAngleSlider');
+    const angleLabel = this.shadowRoot.getElementById('coneAngleLabel');
+    if (angleSlider && angleLabel) {
+      angleSlider.addEventListener('input', () => {
+        const val = parseInt(angleSlider.value, 10);
+        if (!Number.isNaN(val)) {
+          this.coneAngleDeg = Math.max(-180, Math.min(180, val));
+          angleLabel.textContent = `${this.coneAngleDeg}°`;
+          this.drawGrid();
+        }
+      });
+      angleSlider.addEventListener('dblclick', () => {
+        this.coneAngleDeg = this.coneAngleDefault;
+        angleSlider.value = String(this.coneAngleDeg);
+        angleLabel.textContent = `${this.coneAngleDeg}°`;
+        this.drawGrid();
+      });
+    }
   }
 
   endDrawing(e) {
@@ -421,14 +499,35 @@ class ZoneMapperCard extends HTMLElement {
   drawDeviceCone() {
     const ctx = this.ctx;
     const apex = { x: 0, y: 0 };
-    const left = { x: -3000, y: 6000 };
-    const right = { x: 3000, y: 6000 };
+
+    const halfFovRad = ((this.coneFovDeg / 2) * Math.PI) / 180;
+    const phiL = -halfFovRad;
+    const phiR = halfFovRad;
+
+    // Apply rotation; positive rotates to device's right
+    const rotRad = (-this.coneAngleDeg * Math.PI) / 180;
+    let thetaStart = phiL + rotRad;
+    let thetaEnd = phiR + rotRad;
+    if (thetaStart > thetaEnd) {
+      const tmp = thetaStart; thetaStart = thetaEnd; thetaEnd = tmp;
+    }
+
+    const radius = Math.max(0, this.coneYMax);
     const ax = this.valueToPixels(apex.x, 'x');
     const ay = this.valueToPixels(apex.y, 'y');
-    const lx = this.valueToPixels(left.x, 'x');
-    const ly = this.valueToPixels(left.y, 'y');
-    const rx = this.valueToPixels(right.x, 'x');
-    const ry = this.valueToPixels(right.y, 'y');
+
+    // Point on arc at angle ang on circle with radius
+    const pAt = (ang) => ({ x: radius * Math.sin(ang), y: radius * Math.cos(ang) });
+    const L = pAt(thetaStart);
+    const R = pAt(thetaEnd);
+    const lx = this.valueToPixels(L.x, 'x');
+    const ly = this.valueToPixels(L.y, 'y');
+    const rx = this.valueToPixels(R.x, 'x');
+    const ry = this.valueToPixels(R.y, 'y');
+
+    // Build filled sector: apex -> left ray -> arc -> right ray -> apex
+    const segments = 48;
+    const step = (thetaEnd - thetaStart) / segments;
 
     ctx.save();
     ctx.fillStyle = 'rgba(128, 233, 31, 0.06)';
@@ -437,7 +536,14 @@ class ZoneMapperCard extends HTMLElement {
     ctx.beginPath();
     ctx.moveTo(ax, ay);
     ctx.lineTo(lx, ly);
-    ctx.lineTo(rx, ry);
+    for (let i = 1; i <= segments; i++) {
+      const ang = thetaStart + step * i;
+      const pt = pAt(ang);
+      const px = this.valueToPixels(pt.x, 'x');
+      const py = this.valueToPixels(pt.y, 'y');
+      ctx.lineTo(px, py);
+    }
+    ctx.lineTo(ax, ay);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
