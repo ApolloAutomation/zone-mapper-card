@@ -5,10 +5,10 @@ A custom Lovelace card for Home Assistant that lets you draw 2D detection zones 
 ## Features
 
 - Draw, update, and clear zones of multiple shapes: rectangle, ellipse, polygon
-- Polygon interactive multi-click placement (double-click canvas to finish, Backspace to undo last vertex, Esc to cancel)
+- Polygon zone drawing (double-click canvas to finish, Backspace to undo last vertex, Esc to cancel)
 - Polygon capped at 32 vertices (auto-finishes at limit)
 - No hard limit to number of zones or tracked target coordinate pairs
-- Persist zones (shape + data) via backend coordinate sensors (no separate storage)
+- Persist zones (shape + data) via backend coordinate sensors
 - Occupancy binary_sensors per zone using tracked x/y entities
 - Color-coded zones and target dots
 - Mobile-friendly drawing (mouse + touch supported)
@@ -114,6 +114,7 @@ mode: single
 
 ## Notes:
 - After placing an instance of the card with a new device, zone rectangle must be drawn before zone state entities are created and can be added to dashboards
+- Coordinates are rounded to the nearest whole mm value for clarity
 - The `device` value is slugified (lowercase, spaces → underscores) to locate coordinate sensors: `sensor.zone_mapper_<slug(device)>_zone_<id>_coords`.
 - Example: `device: "Office"` → `sensor.zone_mapper_office_zone_1_coords`.
 
