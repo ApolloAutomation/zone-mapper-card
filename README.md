@@ -53,6 +53,7 @@ When adding the card via the UI, the editor pre-fills a starter config. You can 
 
 ```yaml
 type: custom:zone-mapper-card
+dark_mode: false  # optional: true for dark theme styling
 device: office   # name of device/area; used in entity IDs
 zones:           # add or remove zones as needed
   - id: 1
@@ -72,8 +73,6 @@ cone:
   y_max: 6000     # max range (radius) to display, in mm
   fov_deg: 120    # total horizontal FOV in degrees (e.g., 120 => ±60°)
   angle_deg: 0    # initial rotation (-180..180)
-dark_mode: false  # optional: true for dark theme styling
-
 entities:
   - x1: sensor.device_target_1_x
   - y1: sensor.device_target_1_y
