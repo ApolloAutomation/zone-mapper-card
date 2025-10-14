@@ -2,12 +2,16 @@ class ZoneMapperCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
+    this.darkMode = false;
     this.zones = [];
     this.selectedZone = null;
     this.isDrawing = false;
     this.startPoint = null;
     this.entitiesPopulated = false;
     this.trackedEntities = [];
+    // Drawing modes: 'rect' | 'ellipse' | 'polygon'
+    this.drawMode = 'rect';
+    this._polyPoints = [];
 
     // Default card grid ranges in millimeters
     this.xMin = -5000;
@@ -15,12 +19,13 @@ class ZoneMapperCard extends HTMLElement {
     this.yMin = 0;
     this.yMax = 10000;
 
-  // Helper device FOV overlay settings
-  // coneYMax is the displayed range (mm). FOV is total degrees (default 120° => ±60°).
-  this.coneYMax = 6000;
-  this.coneFovDeg = 120;
-  this.coneAngleDeg = 0;
-  this.coneAngleDefault = 0;
+    // Helper device FOV overlay settings
+    // coneYMax is the displayed range (mm). FOV is total degrees (default 120° => ±60°).
+    this.coneYMax = 6000;
+    this.coneFovDeg = 120;
+    this.coneAngleDeg = 0;
+    this.coneAngleDefault = 0;
+    this.polyMaxPoints = 32;
   }
 
   // Default stub config
@@ -67,6 +72,11 @@ class ZoneMapperCard extends HTMLElement {
     this.device = config.device;
     this.zoneConfig = config.zones;
     this.trackedEntities = this.processEntityConfig(config.entities);
+
+    // Theme option
+    if (config.dark_mode !== undefined) {
+      this.darkMode = !!config.dark_mode;
+    }
 
     if (config.grid && typeof config.grid === 'object') {
       const g = config.grid;
@@ -133,33 +143,44 @@ class ZoneMapperCard extends HTMLElement {
       <style>
         :host { display: block; padding: 16px; }
         .container { background: var(--card-background-color); border-radius: var(--ha-card-border-radius); box-shadow: var(--ha-card-box-shadow); padding: 16px; }
+        .container.dark { background: #1e1f23; color: #eceff4; }
+        .container.dark .canvas-container { border-color: #3a3d45; background: #121316; }
         .canvas-container { position: relative; width: 100%; aspect-ratio: 1; border: 2px solid var(--divider-color); border-radius: 4px; overflow: hidden; background: #fafafa; }
         canvas { width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
         .controls { margin-top: 16px; display: flex; gap: 8px; flex-wrap: wrap; }
         #cone-controls { align-items: center; }
         #coneAngleSlider { flex: 1; min-width: 360px; }
         button { padding: 8px 16px; background: var(--primary-color); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        .container.dark button { background: #2d7dd2; }
         button:hover { opacity: 0.9; }
         button.zone-btn { background: var(--primary-color); }
         button.zone-btn.active { background: var(--accent-color); }
         .info { margin-top: 12px; font-size: 14px; color: var(--secondary-text-color); }
+        .container.dark .info { color: #b0b6c2; }
         .zone-list { margin-top: 12px; }
         .zone-item { padding: 8px; margin: 4px 0; background: var(--secondary-background-color); border-radius: 4px; font-size: 14px; }
+        .container.dark .zone-item { background: #2a2c31; color: #d8dee9; }
         .entity-selection { margin-bottom: 16px; padding: 12px; background: var(--secondary-background-color); border-radius: 4px; }
         .entity-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
         .entity-row label { min-width: 20px; font-weight: bold; }
         .entity-row select { flex: 1; padding: 4px 8px; border: 1px solid var(--divider-color); border-radius: 4px; background: var(--card-background-color); color: var(--primary-text-color); }
+        .container.dark .entity-row select { background: #202226; border-color: #3a3d45; color: #e5e9f0; }
         .status-indicator { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-left: 4px; }
         .status-indicator.connected { background: var(--success-color, #4caf50); }
         .status-indicator.disconnected { background: var(--error-color, #f44336); }
         .device-title { font-size: 1.2em; font-weight: bold; margin-bottom: 8px; }
       </style>
-      <div class="container">
+      <div class="container ${this.darkMode ? 'dark' : ''}">
         <div class="device-title">Device: ${this.device}</div>
         <div class="canvas-container">
           <canvas id="zoneCanvas"></canvas>
         </div>
         <div class="controls" id="zone-buttons">
+        </div>
+        <div class="controls" id="mode-buttons">
+          <button id="mode-rect" title="Draw rectangle">Rect</button>
+          <button id="mode-ellipse" title="Draw ellipse">Ellipse</button>
+          <button id="mode-polygon" title="Draw polygon">Poly</button>
         </div>
         <div class="controls" id="cone-controls">
           <label for="coneAngleSlider">Cone rotation: </label>
@@ -167,7 +188,7 @@ class ZoneMapperCard extends HTMLElement {
           <span id="coneAngleLabel">${this.coneAngleDeg}°</span>
         </div>
         <div class="info">
-          Click and drag to draw a zone. Units: mm (X: ${this.xMin}..${this.xMax}, Y: ${this.yMin}..${this.yMax})
+          Click & drag for Rect/Ellipse; Polygon: click points, double-click to finish (max ${this.polyMaxPoints} pts). Units mm (X: ${this.xMin}..${this.xMax}, Y: ${this.yMin}..${this.yMax})
         </div>
         <div class="zone-list" id="zoneList"></div>
       </div>
@@ -197,11 +218,10 @@ class ZoneMapperCard extends HTMLElement {
       btn.addEventListener('dblclick', (e) => {
         e.preventDefault();
         const zoneId = zone.id;
+        // Represent cleared zone by sending shape with null data
         const idx = this.zones.findIndex(z => String(z.id) === String(zoneId));
-        if (idx !== -1) {
-          this.zones.splice(idx, 1);
-        }
-        this.updateHomeAssistant(zoneId, null, null, null, null);
+        if (idx !== -1) this.zones.splice(idx, 1);
+        this.updateHomeAssistantShape(zoneId, 'rect', null);
         this.drawGrid();
         this.updateZoneList();
       });
@@ -244,8 +264,7 @@ class ZoneMapperCard extends HTMLElement {
         this.drawGrid();
         this.updateZoneList();
         this.zoneConfig.forEach(zone => {
-          // Send nulls so backend stores "no zone drawn"
-          this.updateHomeAssistant(zone.id, null, null, null, null);
+          this.updateHomeAssistantShape(zone.id, 'rect', null);
         });
       }
     });
@@ -257,6 +276,27 @@ class ZoneMapperCard extends HTMLElement {
     this.canvas.addEventListener('touchstart', (e) => { e.preventDefault(); this.startDrawing(e); }, { passive: false });
     this.canvas.addEventListener('touchmove', (e) => { e.preventDefault(); this.draw(e); }, { passive: false });
     this.canvas.addEventListener('touchend', (e) => { e.preventDefault(); this.endDrawing(e); }, { passive: false });
+    // Finish polygon on double-click
+    this.canvas.addEventListener('dblclick', (e) => {
+      if (this.drawMode === 'polygon') {
+        this.finishPolygon();
+      }
+    });
+    // Keyboard shortcuts for polygon
+    this._onKeyDown = (ev) => {
+      if (this.drawMode !== 'polygon') return;
+      if (ev.key === 'Escape') {
+        this._polyPoints = [];
+        this.isDrawing = false;
+        this.drawGrid();
+      } else if (ev.key === 'Backspace') {
+        if (this._polyPoints.length > 0) {
+          this._polyPoints.pop();
+          this.drawGrid();
+        }
+      }
+    };
+    window.addEventListener('keydown', this._onKeyDown);
 
     // Cone rotation slider
     const angleSlider = this.shadowRoot.getElementById('coneAngleSlider');
@@ -277,6 +317,21 @@ class ZoneMapperCard extends HTMLElement {
         this.drawGrid();
       });
     }
+
+    // Mode buttons
+    const modeRect = this.shadowRoot.getElementById('mode-rect');
+    const modeEllipse = this.shadowRoot.getElementById('mode-ellipse');
+    const modePolygon = this.shadowRoot.getElementById('mode-polygon');
+    if (modeRect && modeEllipse && modePolygon) {
+      const setMode = (m) => {
+        this.drawMode = m;
+        this._polyPoints = [];
+        this.drawGrid();
+      };
+      modeRect.addEventListener('click', () => setMode('rect'));
+      modeEllipse.addEventListener('click', () => setMode('ellipse'));
+      modePolygon.addEventListener('click', () => setMode('polygon'));
+    }
   }
 
   endDrawing(e) {
@@ -285,33 +340,71 @@ class ZoneMapperCard extends HTMLElement {
     if (this._activeInput && ((isTouch && this._activeInput !== 'touch') || (!isTouch && this._activeInput !== 'mouse'))) {
       return;
     }
+    if (this.drawMode === 'polygon') {
+      // Add a vertex on each mouse/touch end
+      const p = this._getPointFromEvent(e);
+      const vx = this.pixelsToValue(p.x, 'x');
+      const vy = this.pixelsToValue(p.y, 'y');
+      if (this._polyPoints.length < this.polyMaxPoints) {
+        this._polyPoints.push({ x: vx, y: vy });
+        // Auto-finish if we hit max and have at least 3 points
+        if (this._polyPoints.length === this.polyMaxPoints && this._polyPoints.length >= 3) {
+          this.finishPolygon();
+          return;
+        }
+      } else {
+        // Already at limit, finalize if valid
+        if (this._polyPoints.length >= 3) this.finishPolygon();
+        return;
+      }
+      this.drawGrid();
+      return;
+    }
     this.isDrawing = false;
     const endPoint = this._getPointFromEvent(e);
     const zone = this.zones.find(z => z.id === this.selectedZone);
     // Convert drawn zones to mm
-    const x_min = Math.min(
-      this.pixelsToValue(this.startPoint.x, 'x'),
-      this.pixelsToValue(endPoint.x, 'x')
-    );
-    const x_max = Math.max(
-      this.pixelsToValue(this.startPoint.x, 'x'),
-      this.pixelsToValue(endPoint.x, 'x')
-    );
-    const y_min = Math.min(
-      this.pixelsToValue(this.startPoint.y, 'y'),
-      this.pixelsToValue(endPoint.y, 'y')
-    );
-    const y_max = Math.max(
-      this.pixelsToValue(this.startPoint.y, 'y'),
-      this.pixelsToValue(endPoint.y, 'y')
-    );
-    const newZone = {
-      id: this.selectedZone,
-      x_min: Math.max(this.xMin, Math.min(this.xMax, x_min)),
-      x_max: Math.max(this.xMin, Math.min(this.xMax, x_max)),
-      y_min: Math.max(this.yMin, Math.min(this.yMax, y_min)),
-      y_max: Math.max(this.yMin, Math.min(this.yMax, y_max))
-    };
+    let payload = null;
+    if (this.drawMode === 'rect') {
+      const x_min = Math.min(
+        this.pixelsToValue(this.startPoint.x, 'x'),
+        this.pixelsToValue(endPoint.x, 'x')
+      );
+      const x_max = Math.max(
+        this.pixelsToValue(this.startPoint.x, 'x'),
+        this.pixelsToValue(endPoint.x, 'x')
+      );
+      const y_min = Math.min(
+        this.pixelsToValue(this.startPoint.y, 'y'),
+        this.pixelsToValue(endPoint.y, 'y')
+      );
+      const y_max = Math.max(
+        this.pixelsToValue(this.startPoint.y, 'y'),
+        this.pixelsToValue(endPoint.y, 'y')
+      );
+      payload = { shape: 'rect', data: {
+        x_min: Math.max(this.xMin, Math.min(this.xMax, x_min)),
+        x_max: Math.max(this.xMin, Math.min(this.xMax, x_max)),
+        y_min: Math.max(this.yMin, Math.min(this.yMax, y_min)),
+        y_max: Math.max(this.yMin, Math.min(this.yMax, y_max)),
+      }};
+    } else if (this.drawMode === 'ellipse') {
+      // Bounding box -> ellipse center/radii
+      const x1 = this.pixelsToValue(this.startPoint.x, 'x');
+      const y1 = this.pixelsToValue(this.startPoint.y, 'y');
+      const x2 = this.pixelsToValue(endPoint.x, 'x');
+      const y2 = this.pixelsToValue(endPoint.y, 'y');
+      const cx = (x1 + x2) / 2;
+      const cy = (y1 + y2) / 2;
+      const rx = Math.abs(x2 - x1) / 2;
+      const ry = Math.abs(y2 - y1) / 2;
+      payload = { shape: 'ellipse', data: { cx, cy, rx, ry } };
+    } else if (this.drawMode === 'polygon') {
+      // polygon finalization is handled by dblclick -> finishPolygon()
+    }
+
+    if (!payload) return;
+    const newZone = { id: this.selectedZone, ...payload.data, shape: payload.shape };
 
     if (zone) {
       Object.assign(zone, newZone);
@@ -320,13 +413,7 @@ class ZoneMapperCard extends HTMLElement {
     }
     this.drawGrid();
     this.updateZoneList();
-    this.updateHomeAssistant(
-      this.selectedZone,
-      newZone.x_min,
-      newZone.x_max,
-      newZone.y_min,
-      newZone.y_max
-    );
+    this.updateHomeAssistantShape(this.selectedZone, payload.shape, payload.data);
   }
 
   _getPointFromEvent(e) {
@@ -350,15 +437,13 @@ class ZoneMapperCard extends HTMLElement {
     };
   }
 
-  updateHomeAssistant(zoneId, x_min, x_max, y_min, y_max) {
+  updateHomeAssistantShape(zoneId, shape, data) {
     if (!this._hass) return;
     this._hass.callService('zone_mapper', 'update_zone', {
       device: this.device,
       zone_id: zoneId,
-      x_min,
-      x_max,
-      y_min,
-      y_max,
+      shape,
+      data,
       entities: this.trackedEntities.filter(p => p.x && p.y)
     });
   }
@@ -369,7 +454,14 @@ class ZoneMapperCard extends HTMLElement {
     this.zones.forEach(zone => {
       const item = document.createElement('div');
       item.className = 'zone-item';
-      item.textContent = `Zone ${zone.id}: (${zone.x_min.toFixed(0)} mm, ${zone.y_min.toFixed(0)} mm)  (${zone.x_max.toFixed(0)} mm, ${zone.y_max.toFixed(0)} mm)`;
+      if (zone.shape === 'rect') {
+        item.textContent = `Zone ${zone.id} [rect]: (${zone.x_min.toFixed(0)} mm, ${zone.y_min.toFixed(0)} mm)  (${zone.x_max.toFixed(0)} mm, ${zone.y_max.toFixed(0)} mm)`;
+      } else if (zone.shape === 'ellipse') {
+        item.textContent = `Zone ${zone.id} [ellipse]: center=(${zone.cx.toFixed(0)}, ${zone.cy.toFixed(0)}) r=(${zone.rx.toFixed(0)}, ${zone.ry.toFixed(0)})`;
+      } else if (zone.shape === 'polygon') {
+        const n = Array.isArray(zone.points) ? zone.points.length : 0;
+        item.textContent = `Zone ${zone.id} [polygon]: ${n} pts`;
+      }
       list.appendChild(item);
     });
   }
@@ -381,20 +473,35 @@ class ZoneMapperCard extends HTMLElement {
       const entityId = `sensor.zone_mapper_${sanitizedDevice}_zone_${zoneConf.id}_coords`;
       const state = this._hass.states[entityId];
       if (state && state.attributes) {
-        const { x_min, x_max, y_min, y_max } = state.attributes;
-        const vals = [x_min, x_max, y_min, y_max];
-        const allNumbers = vals.every(v => typeof v === 'number' && isFinite(v));
-        if (allNumbers) {
-          const existingZone = this.zones.find(z => z.id === zoneConf.id);
-          const newZone = { id: zoneConf.id, x_min, x_max, y_min, y_max };
-          if (existingZone) {
-            Object.assign(existingZone, newZone);
-          } else {
-            this.zones.push(newZone);
-          }
+        if ('shape' in state.attributes) {
+          const shape = state.attributes.shape;
+          const data = state.attributes.data;
+            if (data) {
+              const z = { id: zoneConf.id, shape, ...data };
+              const existingZone = this.zones.find(zz => zz.id === zoneConf.id);
+              if (existingZone) Object.assign(existingZone, z); else this.zones.push(z);
+            }
         }
       }
     });
+    this.drawGrid();
+    this.updateZoneList();
+  }
+
+  finishPolygon() {
+    if (this._polyPoints.length >= 3 && this.selectedZone !== null) {
+      // Enforce max points on commit
+      if (this._polyPoints.length > this.polyMaxPoints) {
+        this._polyPoints = this._polyPoints.slice(0, this.polyMaxPoints);
+      }
+      const payload = { shape: 'polygon', data: { points: this._polyPoints.slice(0, this.polyMaxPoints) } };
+      const newZone = { id: this.selectedZone, ...payload.data, shape: payload.shape };
+      const zone = this.zones.find(z => z.id === this.selectedZone);
+      if (zone) Object.assign(zone, newZone); else this.zones.push(newZone);
+      this.updateHomeAssistantShape(this.selectedZone, payload.shape, payload.data);
+    }
+    this._polyPoints = [];
+    this.isDrawing = false;
     this.drawGrid();
     this.updateZoneList();
   }
@@ -465,33 +572,52 @@ class ZoneMapperCard extends HTMLElement {
       'rgba(156, 39, 176, 0.30)'
     ];
     this.zones.forEach((zone, idx) => {
-      const x1 = this.valueToPixels(zone.x_min, 'x');
-      const y1 = this.valueToPixels(zone.y_min, 'y');
-      const x2 = this.valueToPixels(zone.x_max, 'x');
-      const y2 = this.valueToPixels(zone.y_max, 'y');
-      const x = Math.min(x1, x2);
-      const y = Math.min(y1, y2);
-      const width = Math.abs(x2 - x1);
-      const height = Math.abs(y2 - y1);
-
       const color = colors[(Number(zone.id) - 1) % colors.length] || colors[idx % colors.length];
-      ctx.fillStyle = color;
       ctx.strokeStyle = color.replace('0.30', '1');
+      ctx.fillStyle = color;
       ctx.lineWidth = 2;
-      ctx.fillRect(x, y, width, height);
-      ctx.strokeRect(x, y, width, height);
-
-      const zoneConf = this.zoneConfig.find(zc => String(zc.id) === String(zone.id));
-      if (zoneConf && width > 20 && height > 14) {
-        const label = zoneConf.name || `Zone ${zone.id}`;
-        ctx.font = '12px sans-serif';
-        ctx.fillStyle = '#212121';
-        const metrics = ctx.measureText(label);
-        const padX = 4, padY = 2, h = 14, w = metrics.width + padX * 2;
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
-        ctx.fillRect(x + 2, y + 2, w, h);
-        ctx.fillStyle = '#212121';
-        ctx.fillText(label, x + 2 + padX, y + 2 + 11);
+      if (zone.shape === 'rect') {
+        const x1 = this.valueToPixels(zone.x_min, 'x');
+        const y1 = this.valueToPixels(zone.y_min, 'y');
+        const x2 = this.valueToPixels(zone.x_max, 'x');
+        const y2 = this.valueToPixels(zone.y_max, 'y');
+        const x = Math.min(x1, x2);
+        const y = Math.min(y1, y2);
+        const width = Math.abs(x2 - x1);
+        const height = Math.abs(y2 - y1);
+        ctx.fillRect(x, y, width, height);
+        ctx.strokeRect(x, y, width, height);
+        const zoneConf = this.zoneConfig.find(zc => String(zc.id) === String(zone.id));
+        if (zoneConf && width > 20 && height > 14) {
+          const label = zoneConf.name || `Zone ${zone.id}`;
+          ctx.font = '12px sans-serif';
+          ctx.fillStyle = '#212121';
+          const metrics = ctx.measureText(label);
+          const padX = 4, padY = 2, h = 14, w = metrics.width + padX * 2;
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
+          ctx.fillRect(x + 2, y + 2, w, h);
+          ctx.fillStyle = '#212121';
+          ctx.fillText(label, x + 2 + padX, y + 2 + 11);
+        }
+      } else if (zone.shape === 'ellipse') {
+        const cx = this.valueToPixels(zone.cx, 'x');
+        const cy = this.valueToPixels(zone.cy, 'y');
+        const rx = Math.abs(this.valueToPixels(zone.cx + zone.rx, 'x') - this.valueToPixels(zone.cx, 'x'));
+        const ry = Math.abs(this.valueToPixels(zone.cy + zone.ry, 'y') - this.valueToPixels(zone.cy, 'y'));
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      } else if (zone.shape === 'polygon' && Array.isArray(zone.points)) {
+        const pts = zone.points.map(p => ({ x: this.valueToPixels(p.x, 'x'), y: this.valueToPixels(p.y, 'y') }));
+        if (pts.length >= 3) {
+          ctx.beginPath();
+          ctx.moveTo(pts[0].x, pts[0].y);
+          for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+        }
       }
     });
   }
@@ -579,7 +705,37 @@ class ZoneMapperCard extends HTMLElement {
     ctx.setLineDash([5, 5]);
     const width = currentPoint.x - this.startPoint.x;
     const height = currentPoint.y - this.startPoint.y;
-    ctx.strokeRect(this.startPoint.x, this.startPoint.y, width, height);
+    if (this.drawMode === 'rect') {
+      ctx.strokeRect(this.startPoint.x, this.startPoint.y, width, height);
+    } else if (this.drawMode === 'ellipse') {
+      // Draw ellipse preview using bounding box
+      ctx.beginPath();
+      ctx.ellipse(
+        this.startPoint.x + width / 2,
+        this.startPoint.y + height / 2,
+        Math.abs(width) / 2,
+        Math.abs(height) / 2,
+        0, 0, Math.PI * 2
+      );
+      ctx.stroke();
+    } else if (this.drawMode === 'polygon') {
+      // Polygon: each mouseup will finalize; show line from last point to cursor
+      const pts = this._polyPoints.map(p => ({ x: this.valueToPixels(p.x, 'x'), y: this.valueToPixels(p.y, 'y') }));
+      const cur = { x: currentPoint.x, y: currentPoint.y };
+      if (pts.length) {
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+        ctx.lineTo(cur.x, cur.y);
+        ctx.stroke();
+      } else {
+        // first segment from startPoint
+        ctx.beginPath();
+        ctx.moveTo(this.startPoint.x, this.startPoint.y);
+        ctx.lineTo(cur.x, cur.y);
+        ctx.stroke();
+      }
+    }
     ctx.setLineDash([]);
   }
 
