@@ -33,6 +33,7 @@ class ZoneMapperCard extends HTMLElement {
     return {
       type: 'custom:zone-mapper-card',
       device: 'office',
+      dark_mode: false,
       zones: [
         { id: 1, name: 'Zone 1' },
         { id: 2, name: 'Zone 2' },
