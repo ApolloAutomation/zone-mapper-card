@@ -32,8 +32,15 @@ class ZoneMapperCard extends HTMLElement {
   static getStubConfig() {
     return {
       type: 'custom:zone-mapper-card',
-      device: 'office',
+      location: 'Office',
       dark_mode: false,
+      // Optional generator-style inputs (default behavior)
+      // When provided (and direct_entity is not true), the card will auto-build
+      // X/Y entity ids as: sensor.<device>_<id>_<sensor>_target_<n>_<x|y>
+      device: 'apollo_r_pro_1_w',
+      id: '351af0',
+      sensor: 'ld2450',
+      target_count: 3,
       zones: [
         { id: 1, name: 'Zone 1' },
         { id: 2, name: 'Zone 2' },
@@ -50,29 +57,39 @@ class ZoneMapperCard extends HTMLElement {
         fov_deg: 120,
         angle_deg: 0,
       },
-      entities: [
-        { x1: 'sensor.device_target_1_x' },
-        { y1: 'sensor.device_target_1_y' },
-        { x2: 'sensor.device_target_2_x' },
-        { y2: 'sensor.device_target_2_y' },
-        { x3: 'sensor.device_target_3_x' },
-        { y3: 'sensor.device_target_3_y' },
-      ],
+      // To use explicit entity ids instead of generator, set direct_entity: true and
+      // provide the entities array in the style shown below.
+      // direct_entity: true,
+      // entities: [
+      //   { x1: 'sensor.apollo_r_pro_1_w_351af0_ld2450_target_1_x' },
+      //   { y1: 'sensor.apollo_r_pro_1_w_351af0_ld2450_target_1_y' },
+      //   ...
+      // ],
     };
   }
 
   setConfig(config) {
-    if (!config.device) {
-      throw new Error("You must specify a device name.");
+    // Require `location` for naming/UI and backend key
+    if (!config.location) {
+      throw new Error("You must specify a location.");
     }
     if (!config.zones || !Array.isArray(config.zones)) {
       throw new Error("You must specify a list of zones.");
     }
 
     this.config = config;
-    this.device = config.device;
+    // Resolve location name used for UI, entity restoration, and backend
+    this.location = String(config.location);
+
+    // Generator inputs (optional)
+    this.devicePrefix = config.device !== undefined ? String(config.device) : undefined;
+    this.deviceId = config.id !== undefined ? String(config.id) : undefined;
+    this.sensorName = config.sensor !== undefined ? String(config.sensor) : undefined;
+    this.targetCount = Number(config.target_count);
+    this.directEntity = !!config.direct_entity;
+
     this.zoneConfig = config.zones;
-    this.trackedEntities = this.processEntityConfig(config.entities);
+    this.trackedEntities = this.buildTrackedEntities(config);
 
     if (config.dark_mode !== undefined) {
       this.darkMode = !!config.dark_mode;
@@ -138,6 +155,27 @@ class ZoneMapperCard extends HTMLElement {
     return Object.values(entityPairs).filter(pair => pair.x && pair.y);
   }
 
+  // build tracked entities from config. Defaults to generator unless direct_entity is true.
+  buildTrackedEntities(cfg) {
+    if (cfg && cfg.direct_entity) {
+      return this.processEntityConfig(cfg.entities);
+    }
+    const dev = this.devicePrefix;
+    const id = this.deviceId;
+    const sensor = this.sensorName;
+    const count = Number.isFinite(this.targetCount) ? Math.max(0, Math.floor(this.targetCount)) : 0;
+    if (dev && id && sensor && count > 0) {
+      const pairs = [];
+      for (let i = 1; i <= count; i++) {
+        const base = `sensor.${dev}_${id}_${sensor}_target_${i}`;
+        pairs.push({ x: `${base}_x`, y: `${base}_y` });
+      }
+      return pairs;
+    }
+    // Fallback to explicit entities if provided
+    return this.processEntityConfig(cfg?.entities);
+  }
+
   render() {
     this.shadowRoot.innerHTML = `
       <style>
@@ -176,7 +214,7 @@ class ZoneMapperCard extends HTMLElement {
         .device-title { font-size: 1.2em; font-weight: bold; margin-bottom: 8px; }
       </style>
       <div class="container ${this.darkMode ? 'dark' : ''}">
-        <div class="device-title">Device: ${this.device}</div>
+        <div class="device-title">Location: ${this.location}</div>
         <div class="canvas-container">
           <canvas id="zoneCanvas"></canvas>
           <div class="overlay-controls" id="overlayControls">
@@ -227,7 +265,7 @@ class ZoneMapperCard extends HTMLElement {
         // Represent cleared zone by sending shape with null data
         const idx = this.zones.findIndex(z => String(z.id) === String(zoneId));
         if (idx !== -1) this.zones.splice(idx, 1);
-        this.updateHomeAssistantShape(zoneId, 'rect', null);
+        this.updateHomeAssistantShape(zoneId, 'none', null);
         this.drawGrid();
         this.updateZoneList();
         // Clear any in-progress drawing state
@@ -276,7 +314,7 @@ class ZoneMapperCard extends HTMLElement {
         this.drawGrid();
         this.updateZoneList();
         this.zoneConfig.forEach(zone => {
-          this.updateHomeAssistantShape(zone.id, 'rect', null);
+          this.updateHomeAssistantShape(zone.id, 'none', null);
         });
         // Clear any in-progress drawing state
         this.isDrawing = false;
@@ -506,7 +544,7 @@ class ZoneMapperCard extends HTMLElement {
   updateHomeAssistantShape(zoneId, shape, data) {
     if (!this._hass) return;
     this._hass.callService('zone_mapper', 'update_zone', {
-      device: this.device,
+      location: this.location,
       zone_id: zoneId,
       shape,
       data,
@@ -531,9 +569,9 @@ class ZoneMapperCard extends HTMLElement {
 
   updateZonesFromEntities() {
     if (!this._hass) return;
-    const sanitizedDevice = this.device.toLowerCase().replace(/\s+/g, '_');
+    const sanitizedDevice = this.location.toLowerCase().replace(/\s+/g, '_');
     this.zoneConfig.forEach(zoneConf => {
-      const entityId = `sensor.zone_mapper_${sanitizedDevice}_zone_${zoneConf.id}_coords`;
+      const entityId = `sensor.zone_mapper_${sanitizedDevice}_zone_${zoneConf.id}`;
       const state = this._hass.states[entityId];
       if (state && state.attributes) {
         if ('shape' in state.attributes) {

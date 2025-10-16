@@ -36,8 +36,8 @@ A custom Lovelace card for Home Assistant that lets you draw 2D detection zones 
 
 The Zone Mapper integration registers the service `zone_mapper.update_zone` and creates entities:
 
-- Coordinate sensor: `sensor.zone_mapper_<device>_zone_<id>_coords` which include: `shape`, `data` (where `data` is shape-specific or null if cleared)
-- Presence binary sensor: `<device> Zone <id> Presence` (device class: Occupancy)
+- Coordinate sensor: `sensor.zone_mapper_<slug(location)>_zone_<id>` which include: `shape`, `data` (where `data` is shape-specific or null if cleared)
+- Presence binary sensor: `<location> Zone <id> Presence` (device class: Occupancy)
 
 Rectangle data schema: `{ x_min, x_max, y_min, y_max }`
 
@@ -49,13 +49,22 @@ The card uses these attributes to restore zones and reflect occupancy state. A c
 
 ## Card configuration
 
-When adding the card via the UI, the editor pre-fills a starter config. You can edit it inline. Example:
+When adding the card via the UI, the editor pre-fills a starter config. You can edit it inline. Example (generator-based, default):
 
 ```yaml
 type: custom:zone-mapper-card
 dark_mode: false  # optional: true for dark theme styling
-device: office   # name of device/area; used in entity IDs
-zones:           # add or remove zones as needed
+location: Office  # friendly name shown on card; used to build zone entity ids
+
+# Default: generator mode (simpler). These build entity ids like
+# sensor.<device>_<id>_<sensor>_target_<n>_{x|y}
+device: apollo_r_pro_1_w
+id: 351af0
+sensor: ld2450
+target_count: 3
+
+# add or remove zones as needed
+zones:
   - id: 1
     name: Zone 1
   - id: 2
@@ -73,11 +82,29 @@ cone:
   y_max: 6000     # max range (radius) to display, in mm
   fov_deg: 120    # total horizontal FOV in degrees (e.g., 120 => ±60°)
   angle_deg: 0    # initial rotation (-180..180)
+```
+
+Advanced (direct entity):
+
+```yaml
+type: custom:zone-mapper-card
+dark_mode: true
+location: Kitchen
+direct_entity: true
+zones:
+  - id: 1
+    name: Zone 1
+  - id: 2
+    name: Zone 2
+  - id: 3
+    name: Zone 3
 entities:
-  - x1: sensor.device_target_1_x
-  - y1: sensor.device_target_1_y
-  - x2: sensor.device_target_2_x
-  - y2: sensor.device_target_2_y
+  - x1: sensor.apollo_r_pro_1_w_351af0_ld2450_target_1_x
+  - y1: sensor.apollo_r_pro_1_w_351af0_ld2450_target_1_y
+  - x2: sensor.apollo_r_pro_1_w_351af0_ld2450_target_2_x
+  - y2: sensor.apollo_r_pro_1_w_351af0_ld2450_target_2_y
+  - x3: sensor.apollo_r_pro_1_w_351af0_ld2450_target_3_x
+  - y3: sensor.apollo_r_pro_1_w_351af0_ld2450_target_3_y
 ```
 
 ## Example Automation
@@ -115,8 +142,8 @@ mode: single
 ## Notes:
 - After placing an instance of the card with a new device, zone rectangle must be drawn before zone state entities are created and can be added to dashboards
 - Coordinates are rounded to the nearest whole mm value for clarity
-- The `device` value is slugified (lowercase, spaces → underscores) to locate coordinate sensors: `sensor.zone_mapper_<slug(device)>_zone_<id>_coords`.
-- Example: `device: "Office"` → `sensor.zone_mapper_office_zone_1_coords`.
+- The `location` value is slugified (lowercase, spaces → underscores) to locate coordinate sensors: `sensor.zone_mapper_<slug(location)>_zone_<id>`.
+- Example: `location: "Office"` → `sensor.zone_mapper_office_zone_1`.
 
 ## Using the card
 
@@ -143,7 +170,7 @@ All zone updates use a unified shape/data model:
 ```
 service: zone_mapper.update_zone
 data:
-  device: string
+  location: string
   zone_id: number
   shape: 'rect' | 'ellipse' | 'polygon'
   data: null | object       # null clears the zone
