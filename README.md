@@ -4,9 +4,11 @@ A custom Lovelace card for Home Assistant that lets you draw 2D detection zones 
 
 ## Features
 
-- Draw, update, and clear rectangular detection zones on a grid
-- No limit to number of zones or tracked target coordinates
-- Persist zone coordinates via backend “coordinate” sensors (no extra storage)
+- Draw, update, and clear zones of multiple shapes: rectangle, ellipse, polygon
+- Polygon zone drawing (double-click canvas to finish, Backspace to undo last vertex, Esc to cancel)
+- Polygon capped at 32 vertices (auto-finishes at limit)
+- No hard limit to number of zones or tracked target coordinate pairs
+- Persist zones (shape + data) via backend coordinate sensors
 - Occupancy binary_sensors per zone using tracked x/y entities
 - Color-coded zones and target dots
 - Mobile-friendly drawing (mouse + touch supported)
@@ -32,12 +34,18 @@ A custom Lovelace card for Home Assistant that lets you draw 2D detection zones 
 
 ## Backend integration
 
-The Zone Mapper integration registers the service `zone_mapper.update_zone` and creates entities like:
+The Zone Mapper integration registers the service `zone_mapper.update_zone` and creates entities:
 
-- Coordinate sensor: `sensor.zone_mapper_<device>_zone_<id>_coords` (attributes: `x_min`, `x_max`, `y_min`, `y_max`)
+- Coordinate sensor: `sensor.zone_mapper_<device>_zone_<id>_coords` which include: `shape`, `data` (where `data` is shape-specific or null if cleared)
 - Presence binary sensor: `<device> Zone <id> Presence` (device class: Occupancy)
 
-The card uses these to restore zones and to reflect occupancy.
+Rectangle data schema: `{ x_min, x_max, y_min, y_max }`
+
+Ellipse data schema: `{ cx, cy, rx, ry, rotation_deg? }` (rotation currently not editable via UI but supported backend-side)
+
+Polygon data schema: `{ points: [ { x, y }, ... ] }`
+
+The card uses these attributes to restore zones and reflect occupancy state. A cleared zone is represented by `data: null`.
 
 ## Card configuration
 
@@ -45,6 +53,7 @@ When adding the card via the UI, the editor pre-fills a starter config. You can 
 
 ```yaml
 type: custom:zone-mapper-card
+dark_mode: false  # optional: true for dark theme styling
 device: office   # name of device/area; used in entity IDs
 zones:           # add or remove zones as needed
   - id: 1
@@ -64,7 +73,6 @@ cone:
   y_max: 6000     # max range (radius) to display, in mm
   fov_deg: 120    # total horizontal FOV in degrees (e.g., 120 => ±60°)
   angle_deg: 0    # initial rotation (-180..180)
-
 entities:
   - x1: sensor.device_target_1_x
   - y1: sensor.device_target_1_y
@@ -106,17 +114,21 @@ mode: single
 
 ## Notes:
 - After placing an instance of the card with a new device, zone rectangle must be drawn before zone state entities are created and can be added to dashboards
+- Coordinates are rounded to the nearest whole mm value for clarity
 - The `device` value is slugified (lowercase, spaces → underscores) to locate coordinate sensors: `sensor.zone_mapper_<slug(device)>_zone_<id>_coords`.
 - Example: `device: "Office"` → `sensor.zone_mapper_office_zone_1_coords`.
 
 ## Using the card
 
-- Select a zone via its button, then click/touch and drag on the grid to draw the rectangle.
-- Release to save. The card calls `zone_mapper.update_zone`; the backend stores the coordinates.
-- Use “Clear All Zones” to reset all zones (also updates backend to zeros for each configured zone).
-- Double-click a zone button to clear just that zone (sends nulls for that zone only).
-- Target dots are drawn in different colors using the current X/Y sensor values.
-- Rotate the helper “device cone” with the slider (-180..180). You can also set an initial angle via `cone.angle_deg` and a total FOV via `cone.fov_deg` in the YAML. The cone displays ±(fov_deg/2); adjust `cone.y_max` to change the displayed range.
+1. Select a zone via its button.
+2. Choose a drawing mode (Rect / Ellipse / Poly).
+3. For Rect & Ellipse: click/touch and drag to define the bounding box; release to save.
+4. For Polygon: click to place vertices; double-click (or double-tap) to finish. Backspace removes the last vertex; Esc cancels the in-progress polygon.
+  - Max 32 points; reaching the limit auto-finishes the polygon.
+5. Double-click a zone button to clear just that zone (sends `data: null`).
+6. Use “Clear All Zones” to clear every configured zone.
+7. Target dots are drawn in different colors using the current X/Y sensor values.
+8. Rotate the helper “device cone” with the slider (-180..180). Set initial `cone.angle_deg` and `cone.fov_deg` in YAML; cone displays ±(fov_deg/2). Adjust `cone.y_max` for displayed range.
 
 ## Mobile and touch support
 
@@ -126,20 +138,33 @@ mode: single
 
 ## Service contract
 
-The card calls the backend with:
+All zone updates use a unified shape/data model:
 
 ```
 service: zone_mapper.update_zone
 data:
   device: string
   zone_id: number
-  x_min: number
-  x_max: number
-  y_min: number
-  y_max: number
+  shape: 'rect' | 'ellipse' | 'polygon'
+  data: null | object       # null clears the zone
   entities:
     - { x: <entity_id>, y: <entity_id> }
     - ...
+```
+
+Shape-specific data formats:
+
+Rect:
+```
+data: { x_min: number, x_max: number, y_min: number, y_max: number }
+```
+Ellipse:
+```
+data: { cx: number, cy: number, rx: number, ry: number, rotation_deg?: number }
+```
+Polygon:
+```
+data: { points: [ { x: number, y: number }, ... ] }
 ```
 
 ## Troubleshooting
@@ -148,13 +173,14 @@ data:
   - Confirm the resource URL is `/local/zone-mapper-card.js` and the file is under `/config/www`.
   - Clear your browser cache.
 - Zones don’t persist:
-  - Check the coordinate sensors for attributes: `sensor.zone_mapper_<device>_zone_<id>_coords`.
-  - Ensure the `zone_mapper.update_zone` service exists and is called (Developer Tools → Logs/States).
+  - Check coordinate sensor attributes: they should have `shape` and `data`.
+  - Ensure the `zone_mapper.update_zone` service exists and is called. (Developer Tools -> Logs/States)
 - Coordinate Entity not found:
-  - Redraw zone rectangle
+  - Occures sometimes after update. Redraw zone.
+  
 - Presence sensors never turn on:
-  - Verify your tracked X/Y entity states are numeric (not `unknown`/`unavailable`).
-  - Confirm your rectangle bounds cover the expected X/Y range.
+  - Verify tracked X/Y entity states are numeric (not `unknown`/`unavailable`).
+  - Confirm the point lies within the drawn zone (correct shape & coordinates).
 
 ## Development
 
