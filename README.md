@@ -1,19 +1,21 @@
 # Zone Mapper Lovelace Card
 
-A custom Lovelace card for Home Assistant that lets you draw 2D detection zones over a grid and visualize tracked targets (for example, mmWave sensor targets). The card sends zone updates to the Zone Mapper backend integration, which persists the coordinates and exposes occupancy (presence) per zone. Creates boolean presence detection entities for use in automations and scripts.
+A custom Lovelace card for Home Assistant that lets you draw 2D detection zones over a grid and visualize tracked targets (for example, mmWave sensor targets). The card talks to the Zone Mapper backend integration, which persists the zones and exposes per‑zone occupancy sensors you can use in automations.
 
 ## Features
 
 - Draw, update, and clear zones of multiple shapes: rectangle, ellipse, polygon
-- Polygon zone drawing (double-click canvas to finish, Backspace to undo last vertex, Esc to cancel)
-- Polygon capped at 32 vertices (auto-finishes at limit)
-- No hard limit to number of zones or tracked target coordinate pairs
-- Persist zones (shape + data) via backend coordinate sensors
-- Occupancy binary_sensors per zone using tracked x/y entities
-- Color-coded zones and target dots
-- Mobile-friendly drawing (mouse + touch supported)
-- Configurable grid ranges (default X: -5000..5000 mm, Y: 0..10000 mm)
-- Helper overlay (device “view cone”) showing a configurable horizontal FOV (default 120° total, i.e., ±60°) to aid placement
+- Polygon drawing tools: double‑click to finish, Backspace to undo last vertex, Esc to cancel
+- Polygon capped at 32 vertices (auto‑finishes at limit)
+- Zones and rotation persist across Home Assistant restarts (restored from sensor attributes)
+- Presence binary_sensors per zone using tracked X/Y entities
+- Color‑coded zones and target dots; targets are rotated by the device angle for a consistent view
+- Mobile‑friendly drawing (mouse + touch supported)
+- Configurable grid ranges (default X: −5000..5000 mm, Y: 0..10000 mm; Y increases downward)
+- Helper overlay (device “view cone”) with configurable horizontal FOV and rotation angle
+- Compact UI:
+  - Bottom‑left: a single ✎ “Draw” button toggles a vertical menu of modes (▭ Rect, ◯ Ellipse, ⬠ Polygon) that appears above it
+  - Bottom‑right: 🔒 Lock toggle prevents accidental edits (disables drawing and cancels in‑progress)
 
 ## Requirements
 
@@ -34,18 +36,20 @@ A custom Lovelace card for Home Assistant that lets you draw 2D detection zones 
 
 ## Backend integration
 
-The Zone Mapper integration registers the service `zone_mapper.update_zone` and creates entities:
+The Zone Mapper integration exposes a single service and creates two entity types per zone:
 
-- Coordinate sensor: `sensor.zone_mapper_<slug(location)>_zone_<id>` which include: `shape`, `data` (where `data` is shape-specific or null if cleared)
+- Coordinate sensor: `sensor.zone_mapper_<slug(location)>_zone_<id>`
+  - Attributes: `shape`, `data`, `entities`, and `rotation_deg`
+  - The card reads these to restore zones and rotation on load
 - Presence binary sensor: `<location> Zone <id> Presence` (device class: Occupancy)
 
-Rectangle data schema: `{ x_min, x_max, y_min, y_max }`
+Shape data formats:
 
-Ellipse data schema: `{ cx, cy, rx, ry, rotation_deg? }` (rotation currently not editable via UI but supported backend-side)
+- Rect: `{ x_min, x_max, y_min, y_max }`
+- Ellipse: `{ cx, cy, rx, ry }`
+- Polygon: `{ points: [ { x, y }, ... ] }`
 
-Polygon data schema: `{ points: [ { x, y }, ... ] }`
-
-The card uses these attributes to restore zones and reflect occupancy state. A cleared zone is represented by `data: null`.
+To clear a zone, send `data: null` (or `shape: none`).
 
 ## Card configuration
 
@@ -72,7 +76,7 @@ zones:
   - id: 3
     name: Zone 3
 
-# Optional: override grid ranges (mm)
+# Optional: override grid ranges (mm). Grid is Y‑down: y_min is top, y_max is bottom
 grid:
   x_min: -5000
   x_max: 5000
@@ -81,7 +85,7 @@ grid:
 cone:
   y_max: 6000     # max range (radius) to display, in mm
   fov_deg: 120    # total horizontal FOV in degrees (e.g., 120 => ±60°)
-  angle_deg: 0    # initial rotation (-180..180)
+  angle_deg: 0    # initial rotation (-180..180); persisted and used for presence math
 ```
 
 Advanced (direct entity):
@@ -139,23 +143,24 @@ actions:
 mode: single
 ```
 
-## Notes:
-- After placing an instance of the card with a new device, zone rectangle must be drawn before zone state entities are created and can be added to dashboards
-- Coordinates are rounded to the nearest whole mm value for clarity
-- The `location` value is slugified (lowercase, spaces → underscores) to locate coordinate sensors: `sensor.zone_mapper_<slug(location)>_zone_<id>`.
-- Example: `location: "Office"` → `sensor.zone_mapper_office_zone_1`.
+## Notes
+- Entities are created on first update for a location; draw a zone once to initialize aiofsd 
+- Coordinates are rounded to the nearest millimeter by the backend
+- The `location` is slugified (lowercase, spaces → underscores) to locate coordinate sensors: `sensor.zone_mapper_<slug(location)>_zone_<id>`
+- Example: `location: "Office"` → `sensor.zone_mapper_office_zone_1`
 
 ## Using the card
 
 1. Select a zone via its button.
-2. Choose a drawing mode (Rect / Ellipse / Poly).
+2. Click ✎ to reveal modes; choose ▭ Rect / ◯ Ellipse / ⬠ Poly.
 3. For Rect & Ellipse: click/touch and drag to define the bounding box; release to save.
 4. For Polygon: click to place vertices; double-click (or double-tap) to finish. Backspace removes the last vertex; Esc cancels the in-progress polygon.
   - Max 32 points; reaching the limit auto-finishes the polygon.
 5. Double-click a zone button to clear just that zone (sends `data: null`).
 6. Use “Clear All Zones” to clear every configured zone.
-7. Target dots are drawn in different colors using the current X/Y sensor values.
-8. Rotate the helper “device cone” with the slider (-180..180). Set initial `cone.angle_deg` and `cone.fov_deg` in YAML; cone displays ±(fov_deg/2). Adjust `cone.y_max` for displayed range.
+7. Toggle 🔒 to lock/unlock drawing.
+8. Target dots are drawn in different colors using the current X/Y sensor values and are rotated by the current angle.
+9. Rotate the helper “device cone” with the slider (−180..180). This also updates backend `rotation_deg` and persists across restarts. The cone displays ±(fov_deg/2). Adjust `cone.y_max` for displayed range.
 
 ## Mobile and touch support
 
@@ -165,33 +170,48 @@ mode: single
 
 ## Service contract
 
-All zone updates use a unified shape/data model:
+Single service: `zone_mapper.update_zone`.
 
+Payload fields:
+
+- location: string (required)
+- zone_id: number (optional for zone updates; omit for angle‑only update)
+- shape: 'none' | 'rect' | 'ellipse' | 'polygon' (optional; 'none' clears)
+- data: object | null (optional; null clears the zone)
+- rotation_deg: number (optional; −180..180; updates location angle when provided)
+- entities: list of `{ x, y }` entity id pairs (optional; replaces tracked entities for presence)
+
+Examples:
+
+Clear a zone:
 ```
 service: zone_mapper.update_zone
 data:
-  location: string
-  zone_id: number
-  shape: 'rect' | 'ellipse' | 'polygon'
-  data: null | object       # null clears the zone
+  location: Office
+  zone_id: 1
+  shape: none
+  data: null
+```
+
+Update only rotation (no zone change):
+```
+service: zone_mapper.update_zone
+data:
+  location: Office
+  rotation_deg: -15
+```
+
+Update a rectangle and tracked entities:
+```
+service: zone_mapper.update_zone
+data:
+  location: Office
+  zone_id: 2
+  shape: rect
+  data: { x_min: -500, x_max: 500, y_min: 500, y_max: 1500 }
   entities:
-    - { x: <entity_id>, y: <entity_id> }
-    - ...
-```
-
-Shape-specific data formats:
-
-Rect:
-```
-data: { x_min: number, x_max: number, y_min: number, y_max: number }
-```
-Ellipse:
-```
-data: { cx: number, cy: number, rx: number, ry: number, rotation_deg?: number }
-```
-Polygon:
-```
-data: { points: [ { x: number, y: number }, ... ] }
+    - { x: sensor.device_target_1_x, y: sensor.device_target_1_y }
+    - { x: sensor.device_target_2_x, y: sensor.device_target_2_y }
 ```
 
 ## Troubleshooting
@@ -200,14 +220,15 @@ data: { points: [ { x: number, y: number }, ... ] }
   - Confirm the resource URL is `/local/zone-mapper-card.js` and the file is under `/config/www`.
   - Clear your browser cache.
 - Zones don’t persist:
-  - Check coordinate sensor attributes: they should have `shape` and `data`.
-  - Ensure the `zone_mapper.update_zone` service exists and is called. (Developer Tools -> Logs/States)
-- Coordinate Entity not found:
-  - Occures sometimes after update. Redraw zone.
-  
+  - Check the coordinate sensor attributes for `shape`, `data`, and `rotation_deg`
+  - Ensure `zone_mapper.update_zone` is being called (Developer Tools → States/Logs)
+- Coordinate entity not found:
+  - Draw a zone once to initialize entities for the location
 - Presence sensors never turn on:
   - Verify tracked X/Y entity states are numeric (not `unknown`/`unavailable`).
   - Confirm the point lies within the drawn zone (correct shape & coordinates).
+- Targets dots are staying on card/triggering automations even though I have left the view:
+  - This is currently an issue with many ld2450 mmWave sensors using espHome, not related to Zone Mapper
 
 ## Development
 
