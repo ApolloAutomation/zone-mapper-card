@@ -26,14 +26,24 @@ class ZoneMapperCard extends HTMLElement {
     this.coneAngleDeg = 0;
     this.coneAngleDefault = 0;
     this.polyMaxPoints = 32;
+    // UI state
+    this.showModeMenu = false; // collapsible draw mode menu
+    this.isLocked = false;     // lock drawing interactions
   }
 
   // Default stub config
   static getStubConfig() {
     return {
       type: 'custom:zone-mapper-card',
-      device: 'office',
+      location: 'Office',
       dark_mode: false,
+      // Optional generator-style inputs (default behavior)
+      // When provided (and direct_entity is not true), the card will auto-build
+      // X/Y entity ids as: sensor.<device>_<id>_<sensor>_target_<n>_<x|y>
+      device: 'apollo_r_pro_1_w',
+      id: '351af0',
+      sensor: 'ld2450',
+      target_count: 3,
       zones: [
         { id: 1, name: 'Zone 1' },
         { id: 2, name: 'Zone 2' },
@@ -45,34 +55,45 @@ class ZoneMapperCard extends HTMLElement {
         y_min: 0,
         y_max: 10000,
       },
+      // Grid is y-down oriented, so y_min is top, y_max is bottom
       cone: {
         y_max: 6000,
         fov_deg: 120,
         angle_deg: 0,
       },
-      entities: [
-        { x1: 'sensor.device_target_1_x' },
-        { y1: 'sensor.device_target_1_y' },
-        { x2: 'sensor.device_target_2_x' },
-        { y2: 'sensor.device_target_2_y' },
-        { x3: 'sensor.device_target_3_x' },
-        { y3: 'sensor.device_target_3_y' },
-      ],
+      // To use explicit entity ids instead of generator, set direct_entity: true and
+      // provide the entities array in the style shown below.
+      // direct_entity: true,
+      // entities: [
+      //   { x1: 'sensor.apollo_r_pro_1_w_351af0_ld2450_target_1_x' },
+      //   { y1: 'sensor.apollo_r_pro_1_w_351af0_ld2450_target_1_y' },
+      //   ...
+      // ],
     };
   }
 
   setConfig(config) {
-    if (!config.device) {
-      throw new Error("You must specify a device name.");
+    // Require `location` for naming/UI and backend key
+    if (!config.location) {
+      throw new Error("You must specify a location.");
     }
     if (!config.zones || !Array.isArray(config.zones)) {
       throw new Error("You must specify a list of zones.");
     }
 
     this.config = config;
-    this.device = config.device;
+    // Resolve location name used for UI, entity restoration, and backend
+    this.location = String(config.location);
+
+    // Generator inputs (optional)
+    this.devicePrefix = config.device !== undefined ? String(config.device) : undefined;
+    this.deviceId = config.id !== undefined ? String(config.id) : undefined;
+    this.sensorName = config.sensor !== undefined ? String(config.sensor) : undefined;
+    this.targetCount = Number(config.target_count);
+    this.directEntity = !!config.direct_entity;
+
     this.zoneConfig = config.zones;
-    this.trackedEntities = this.processEntityConfig(config.entities);
+    this.trackedEntities = this.buildTrackedEntities(config);
 
     if (config.dark_mode !== undefined) {
       this.darkMode = !!config.dark_mode;
@@ -138,6 +159,27 @@ class ZoneMapperCard extends HTMLElement {
     return Object.values(entityPairs).filter(pair => pair.x && pair.y);
   }
 
+  // build tracked entities from config. Defaults to generator unless direct_entity is true.
+  buildTrackedEntities(cfg) {
+    if (cfg && cfg.direct_entity) {
+      return this.processEntityConfig(cfg.entities);
+    }
+    const dev = this.devicePrefix;
+    const id = this.deviceId;
+    const sensor = this.sensorName;
+    const count = Number.isFinite(this.targetCount) ? Math.max(0, Math.floor(this.targetCount)) : 0;
+    if (dev && id && sensor && count > 0) {
+      const pairs = [];
+      for (let i = 1; i <= count; i++) {
+        const base = `sensor.${dev}_${id}_${sensor}_target_${i}`;
+        pairs.push({ x: `${base}_x`, y: `${base}_y` });
+      }
+      return pairs;
+    }
+    // Fallback to explicit entities if provided
+    return this.processEntityConfig(cfg?.entities);
+  }
+
   render() {
     this.shadowRoot.innerHTML = `
       <style>
@@ -147,12 +189,14 @@ class ZoneMapperCard extends HTMLElement {
         .container.dark .canvas-container { border-color: #3a3d45; background: #121316; }
         .canvas-container { position: relative; width: 100%; aspect-ratio: 1; border: 2px solid var(--divider-color); border-radius: 4px; overflow: hidden; background: #fafafa; isolation: isolate; }
         canvas { width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
-        .overlay-controls { position: absolute; top: 4px; left: 4px; display: flex; gap: 4px; z-index: 1; }
+        .overlay-controls { position: absolute; bottom: 4px; display: flex; gap: 4px; z-index: 1; }
+        .overlay-controls-left { left: 4px; flex-direction: column; align-items: flex-start; }
+        .overlay-controls-right { right: 4px; }
         .overlay-controls button { width: 30px; height: 30px; padding: 0; background: rgba(0,0,0,0.55); color: #fff; border: 1px solid rgba(255,255,255,0.3); border-radius: 4px; font-size: 11px; line-height: 1; cursor: pointer; backdrop-filter: blur(4px); }
         .container.dark .overlay-controls button { background: rgba(255,255,255,0.18); color: #fff; border-color: rgba(255,255,255,0.35); }
         .overlay-controls button.active { outline: 2px solid #4caf50; }
         .overlay-controls button:disabled { opacity: 0.4; cursor: default; }
-        .controls { margin-top: 16px; display: flex; gap: 8px; flex-wrap: wrap; }
+        .controls { margin-bottom: 16px; display: flex; gap: 8px; flex-wrap: wrap; }
         #cone-controls { align-items: center; }
         #coneAngleSlider { flex: 1; min-width: 300px; }
         button { padding: 8px 16px; background: var(--primary-color); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
@@ -162,8 +206,6 @@ class ZoneMapperCard extends HTMLElement {
         button.zone-btn.active { background: var(--accent-color); }
         .info { margin-top: 12px; font-size: 14px; color: var(--secondary-text-color); }
         .container.dark .info { color: #b0b6c2; }
-        .zone-list { margin-top: 12px; }
-        .zone-item { padding: 8px; margin: 4px 0; background: var(--secondary-background-color); border-radius: 4px; font-size: 14px; }
         .container.dark .zone-item { background: #2a2c31; color: #d8dee9; }
         .entity-selection { margin-bottom: 16px; padding: 12px; background: var(--secondary-background-color); border-radius: 4px; }
         .entity-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
@@ -176,15 +218,21 @@ class ZoneMapperCard extends HTMLElement {
         .device-title { font-size: 1.2em; font-weight: bold; margin-bottom: 8px; }
       </style>
       <div class="container ${this.darkMode ? 'dark' : ''}">
-        <div class="device-title">Device: ${this.device}</div>
+        <div class="device-title">Location: ${this.location}</div>
         <div class="canvas-container">
           <canvas id="zoneCanvas"></canvas>
-          <div class="overlay-controls" id="overlayControls">
-            <button id="btnModeRect" title="Rectangle">R</button>
-            <button id="btnModeEllipse" title="Ellipse">E</button>
-            <button id="btnModePolygon" title="Polygon">P</button>
-            <button id="btnPolyUndo" title="Undo last point">↺</button>
-            <button id="btnPolyFinish" title="Finish polygon">✓</button>
+          <div class="overlay-controls overlay-controls-left" id="overlayControlsLeft">
+            <div id="modeGroup" style="display: ${this.showModeMenu ? 'flex' : 'none'}; flex-direction: column; gap: 4px;">
+              <button id="btnPolyFinish" title="Finish polygon">✓</button>
+              <button id="btnPolyUndo" title="Undo last point">↺</button>
+              <button id="btnModePolygon" title="Polygon">⬠</button>
+              <button id="btnModeEllipse" title="Ellipse">◯</button>
+              <button id="btnModeRect" title="Rectangle">▭</button>
+            </div>
+            <button id="btnModeMenu" title="Drawing modes">✎</button>
+          </div>
+          <div class="overlay-controls overlay-controls-right" id="overlayControlsRight">
+            <button id="btnLock" title="Lock drawing">🔓</button>
           </div>
         </div>
         <div class="controls" id="zone-buttons">
@@ -227,7 +275,7 @@ class ZoneMapperCard extends HTMLElement {
         // Represent cleared zone by sending shape with null data
         const idx = this.zones.findIndex(z => String(z.id) === String(zoneId));
         if (idx !== -1) this.zones.splice(idx, 1);
-        this.updateHomeAssistantShape(zoneId, 'rect', null);
+        this.updateHomeAssistantShape(zoneId, 'none', null);
         this.drawGrid();
         this.updateZoneList();
         // Clear any in-progress drawing state
@@ -276,7 +324,7 @@ class ZoneMapperCard extends HTMLElement {
         this.drawGrid();
         this.updateZoneList();
         this.zoneConfig.forEach(zone => {
-          this.updateHomeAssistantShape(zone.id, 'rect', null);
+          this.updateHomeAssistantShape(zone.id, 'none', null);
         });
         // Clear any in-progress drawing state
         this.isDrawing = false;
@@ -328,20 +376,44 @@ class ZoneMapperCard extends HTMLElement {
           this.drawGrid();
         }
       });
+      // Send rotation to backend when user finishes sliding
+      angleSlider.addEventListener('change', () => {
+        if (!this._hass) return;
+        this._hass.callService('zone_mapper', 'update_zone', {
+          location: this.location,
+          rotation_deg: this.coneAngleDeg,
+        });
+      });
       angleSlider.addEventListener('dblclick', () => {
         this.coneAngleDeg = this.coneAngleDefault;
         angleSlider.value = String(this.coneAngleDeg);
         angleLabel.textContent = `${this.coneAngleDeg}°`;
         this.drawGrid();
+        if (this._hass) {
+          this._hass.callService('zone_mapper', 'update_zone', {
+            location: this.location,
+            rotation_deg: this.coneAngleDeg,
+          });
+        }
       });
     }
 
-    // Mode buttons
+    // Mode menu and buttons
+    const btnModeMenu = this.shadowRoot.getElementById('btnModeMenu');
+    const modeGroup = this.shadowRoot.getElementById('modeGroup');
     const btnModeRect = this.shadowRoot.getElementById('btnModeRect');
     const btnModeEllipse = this.shadowRoot.getElementById('btnModeEllipse');
     const btnModePolygon = this.shadowRoot.getElementById('btnModePolygon');
     const btnPolyUndo = this.shadowRoot.getElementById('btnPolyUndo');
     const btnPolyFinish = this.shadowRoot.getElementById('btnPolyFinish');
+    const btnLock = this.shadowRoot.getElementById('btnLock');
+
+    if (btnModeMenu && modeGroup) {
+      btnModeMenu.addEventListener('click', () => {
+        this.showModeMenu = !this.showModeMenu;
+        modeGroup.style.display = this.showModeMenu ? 'flex' : 'none';
+      });
+    }
     const overlayButtons = [btnModeRect, btnModeEllipse, btnModePolygon];
     const setMode = (m) => {
       this.drawMode = m;
@@ -368,6 +440,21 @@ class ZoneMapperCard extends HTMLElement {
     if (btnPolyFinish) btnPolyFinish.addEventListener('click', () => {
       if (this.drawMode === 'polygon') this.finishPolygon();
     });
+
+    if (btnLock) {
+      const updateLockVisual = () => {
+        btnLock.textContent = this.isLocked ? '🔒' : '🔓';
+        btnLock.title = this.isLocked ? 'Unlock drawing' : 'Lock drawing';
+        this.canvas.style.cursor = this.isLocked ? 'not-allowed' : 'crosshair';
+      };
+      btnLock.addEventListener('click', () => {
+        this.isLocked = !this.isLocked;
+        updateLockVisual();
+        // Cancel any in-progress drawing when locking
+        if (this.isLocked && this.isDrawing) this.cancelDrawing();
+      });
+      updateLockVisual();
+    }
     // Initialize active mode
     setMode(this.drawMode || 'rect');
 
@@ -506,7 +593,7 @@ class ZoneMapperCard extends HTMLElement {
   updateHomeAssistantShape(zoneId, shape, data) {
     if (!this._hass) return;
     this._hass.callService('zone_mapper', 'update_zone', {
-      device: this.device,
+      location: this.location,
       zone_id: zoneId,
       shape,
       data,
@@ -531,9 +618,9 @@ class ZoneMapperCard extends HTMLElement {
 
   updateZonesFromEntities() {
     if (!this._hass) return;
-    const sanitizedDevice = this.device.toLowerCase().replace(/\s+/g, '_');
+    const sanitizedDevice = this.location.toLowerCase().replace(/\s+/g, '_');
     this.zoneConfig.forEach(zoneConf => {
-      const entityId = `sensor.zone_mapper_${sanitizedDevice}_zone_${zoneConf.id}_coords`;
+      const entityId = `sensor.zone_mapper_${sanitizedDevice}_zone_${zoneConf.id}`;
       const state = this._hass.states[entityId];
       if (state && state.attributes) {
         if ('shape' in state.attributes) {
@@ -544,6 +631,14 @@ class ZoneMapperCard extends HTMLElement {
               const existingZone = this.zones.find(zz => zz.id === zoneConf.id);
               if (existingZone) Object.assign(existingZone, z); else this.zones.push(z);
             }
+        }
+        // restore rotation if available
+        if (typeof state.attributes.rotation_deg === 'number') {
+          this.coneAngleDeg = Math.max(-180, Math.min(180, Math.round(state.attributes.rotation_deg)));
+          const angleSlider = this.shadowRoot.getElementById('coneAngleSlider');
+          const angleLabel = this.shadowRoot.getElementById('coneAngleLabel');
+          if (angleSlider) angleSlider.value = String(this.coneAngleDeg);
+          if (angleLabel) angleLabel.textContent = `${this.coneAngleDeg}°`;
         }
       }
     });
@@ -590,7 +685,8 @@ class ZoneMapperCard extends HTMLElement {
     ctx.stroke();
     ctx.closePath();
 
-    ctx.strokeStyle = '#9e9e9e';
+    const originColor = this.darkMode ? '#ffffff' : '#000000';
+    ctx.strokeStyle = originColor;
     ctx.lineWidth = 1.5;
     const y0 = this.valueToPixels(0, 'y');
     ctx.beginPath();
@@ -603,7 +699,7 @@ class ZoneMapperCard extends HTMLElement {
     ctx.lineTo(x0, this.canvas.height);
     ctx.stroke();
 
-    ctx.fillStyle = '#424242';
+    ctx.fillStyle = originColor;
     ctx.beginPath();
     ctx.arc(x0, y0, 3, 0, Math.PI * 2);
     ctx.fill();
@@ -616,12 +712,17 @@ class ZoneMapperCard extends HTMLElement {
     // Draw current tracked targets
     if (this._hass) {
       const colors = ['#f44336', '#2196f3', '#4caf50', '#ffc107', '#9c27b0'];
+      const theta = (this.coneAngleDeg || 0) * Math.PI / 180;
+      const c = Math.cos(theta);
+      const s = Math.sin(theta);
+      const rotatePoint = (x, y) => ({ x: x * c + y * s, y: -x * s + y * c });
       this.trackedEntities.forEach((pair, idx) => {
         if (pair.x && pair.y && this._hass.states[pair.x] && this._hass.states[pair.y]) {
           const xVal = parseFloat(this._hass.states[pair.x].state);
           const yVal = parseFloat(this._hass.states[pair.y].state);
           if (!isNaN(xVal) && !isNaN(yVal)) {
-            this.drawCurrentPosition(xVal, yVal, colors[idx % colors.length]);
+            const rot = rotatePoint(xVal, yVal);
+            this.drawCurrentPosition(rot.x, rot.y, colors[idx % colors.length]);
           }
         }
       });
@@ -873,6 +974,7 @@ class ZoneMapperCard extends HTMLElement {
   }
 
   startDrawing(e) {
+    if (this.isLocked) return;
     if (this.selectedZone === null) return;
     this.isDrawing = true;
     this._activeInput = e.touches ? 'touch' : 'mouse';
@@ -882,7 +984,7 @@ class ZoneMapperCard extends HTMLElement {
   }
 
   draw(e) {
-    if (!this.isDrawing) return;
+    if (this.isLocked || !this.isDrawing) return;
     const isTouch = !!(e.touches || e.changedTouches);
     if (this._activeInput && ((isTouch && this._activeInput !== 'touch') || (!isTouch && this._activeInput !== 'mouse'))) {
       return;
@@ -921,7 +1023,8 @@ class ZoneMapperCard extends HTMLElement {
     if (axis === 'x') {
       return (val - this.xMin) * this.pxPerX;
     } else {
-      return this.canvas.height - (val - this.yMin) * this.pxPerY;
+      // Y increases downward: map directly without flipping
+      return (val - this.yMin) * this.pxPerY;
     }
   }
 
@@ -929,7 +1032,8 @@ class ZoneMapperCard extends HTMLElement {
     if (axis === 'x') {
       return pix / this.pxPerX + this.xMin;
     } else {
-      return this.yMin + (this.canvas.height - pix) / this.pxPerY;
+      // Inverse of valueToPixels when Y increases downward
+      return this.yMin + pix / this.pxPerY;
     }
   }
 
