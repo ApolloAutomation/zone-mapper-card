@@ -40,8 +40,8 @@ class ZoneMapperCard extends HTMLElement {
       // Optional generator-style inputs (default behavior)
       // When provided (and direct_entity is not true), the card will auto-build
       // X/Y entity ids as: sensor.<device>_<id>_<sensor>_target_<n>_<x|y>
-      device: 'apollo_r_pro_1_w',
-      id: '351af0',
+      device: 'device name',
+      id: 'unique id',
       sensor: 'ld2450',
       target_count: 3,
       zones: [
