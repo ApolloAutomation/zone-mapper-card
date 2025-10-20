@@ -9,6 +9,10 @@ class ZoneMapperCard extends HTMLElement {
     this.startPoint = null;
     this.entitiesPopulated = false;
     this.trackedEntities = [];
+    this._devices = [];
+    this._allEntities = [];
+    this._selectedDeviceId = null;
+    this.showConfig = false;
     // Drawing modes: 'rect' | 'ellipse' | 'polygon'
     this.drawMode = 'rect';
     this._polyPoints = [];
@@ -40,10 +44,6 @@ class ZoneMapperCard extends HTMLElement {
       // Optional generator-style inputs (default behavior)
       // When provided (and direct_entity is not true), the card will auto-build
       // X/Y entity ids as: sensor.<device>_<id>_<sensor>_target_<n>_<x|y>
-      device: 'device_name',
-      id: 'unique_id',
-      sensor: 'ld2450',
-      target_count: 3,
       zones: [
         { id: 1, name: 'Zone 1' },
         { id: 2, name: 'Zone 2' },
@@ -138,6 +138,10 @@ class ZoneMapperCard extends HTMLElement {
     if (this.canvas) {
       this.drawGrid();
     }
+    if (firstTime && this._hass) {
+      // Load device/entity registries once on first hass injection
+      this._ensureRegistriesLoaded();
+    }
   }
 
   processEntityConfig(entityConfig) {
@@ -197,8 +201,8 @@ class ZoneMapperCard extends HTMLElement {
         .overlay-controls button.active { outline: 2px solid #4caf50; }
         .overlay-controls button:disabled { opacity: 0.4; cursor: default; }
         .controls { margin-bottom: 16px; display: flex; gap: 8px; flex-wrap: wrap; }
-        #cone-controls { align-items: center; }
-        #coneAngleSlider { flex: 1; min-width: 300px; }
+        #cone-controls { align-items: center; padding-top: 8px; }
+        #coneAngleSlider { flex: 1; min-width: 160px; }
         button { padding: 8px 16px; background: var(--primary-color); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
         .container.dark button { background: #2d7dd2; }
         button:hover { opacity: 0.9; }
@@ -207,15 +211,21 @@ class ZoneMapperCard extends HTMLElement {
         .info { margin-top: 12px; font-size: 14px; color: var(--secondary-text-color); }
         .container.dark .info { color: #b0b6c2; }
         .container.dark .zone-item { background: #2a2c31; color: #d8dee9; }
-        .entity-selection { margin-bottom: 16px; padding: 12px; background: var(--secondary-background-color); border-radius: 4px; }
-        .entity-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
-        .entity-row label { min-width: 20px; font-weight: bold; }
-        .entity-row select { flex: 1; padding: 4px 8px; border: 1px solid var(--divider-color); border-radius: 4px; background: var(--card-background-color); color: var(--primary-text-color); }
+        .entity-selection { margin: 8px 0 8px 0; padding: 12px; background: var(--secondary-background-color); border-radius: 4px; }
+        .entity-row { display: flex; flex-direction: column; align-items: stretch; gap: 6px; margin: 8px 0; }
+        .entity-row label { font-weight: bold; opacity: 0.9; }
+        .entity-row select { width: 100%; padding: 4px 8px; border: 1px solid var(--divider-color); border-radius: 4px; background: var(--card-background-color); color: var(--primary-text-color); font-size: 13px; }
         .container.dark .entity-row select { background: #202226; border-color: #3a3d45; color: #e5e9f0; }
-        .status-indicator { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-left: 4px; }
-        .status-indicator.connected { background: var(--success-color, #4caf50); }
-        .status-indicator.disconnected { background: var(--error-color, #f44336); }
         .device-title { font-size: 1.2em; font-weight: bold; margin-bottom: 8px; }
+        .entity-controls { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+        .entity-controls select { width: 100%; }
+        .pair-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+        .subtle { opacity: 0.85; font-size: 0.92em; }
+        .config { margin-top: 10px; }
+        .config-header { display: flex; align-items: center; justify-content: space-between; cursor: pointer; padding: 8px 12px; background: var(--secondary-background-color); border-radius: 4px; }
+        .config-title { font-weight: 600; }
+        .config-content { padding: 8px 0; display: none; }
+        .config-content.open { display: block; }
       </style>
       <div class="container ${this.darkMode ? 'dark' : ''}">
         <div class="device-title">Location: ${this.location}</div>
@@ -237,11 +247,31 @@ class ZoneMapperCard extends HTMLElement {
         </div>
         <div class="controls" id="zone-buttons">
         </div>
-        <div class="controls" id="cone-controls">
-          <label for="coneAngleSlider">Cone rotation: </label>
-          <input type="range" id="coneAngleSlider" min="-180" max="180" step="1" value="${this.coneAngleDeg}" />
-          <span id="coneAngleLabel">${this.coneAngleDeg}°</span>
-      </div>
+        <div class="config">
+          <div id="btnConfigToggle" class="config-header">
+            <span class="config-title">Config</span>
+            <span>${this.showConfig ? '▾' : '▸'}</span>
+          </div>
+          <div id="configContent" class="config-content ${this.showConfig ? 'open' : ''}">
+            <div class="entity-selection">
+              <div class="entity-controls">
+                <label for="deviceSelect" class="subtle">Device</label>
+                <select id="deviceSelect"></select>
+                <span class="subtle">Select the HA device that owns your X/Y sensor entities.</span>
+              </div>
+              <div id="entityPairs"></div>
+              <div class="pair-actions">
+                <button id="btnAddPair" title="Add X/Y pair">Add X/Y Pair</button>
+                <button id="btnApplyEntities" title="Save entity pairs to backend">Apply</button>
+              </div>
+            </div>
+            <div class="controls" id="cone-controls">
+              <label for="coneAngleSlider">Cone rotation: </label>
+              <input type="range" id="coneAngleSlider" min="-180" max="180" step="1" value="${this.coneAngleDeg}" />
+              <span id="coneAngleLabel">${this.coneAngleDeg}°</span>
+            </div>
+          </div>
+        </div>
         <div class="info">
           Click & drag for Rect/Ellipse. Polygon: click points, double-click to finish (max ${this.polyMaxPoints} pts). Units mm (X: ${this.xMin}..${this.xMax}, Y: ${this.yMin}..${this.yMax})
         </div>
@@ -251,6 +281,7 @@ class ZoneMapperCard extends HTMLElement {
     this.renderZoneButtons();
     this.setupCanvas();
     this.attachEventListeners();
+    this._renderEntitySelection();
     if (this._hass) {
       this.updateZonesFromEntities();
     }
@@ -475,6 +506,51 @@ class ZoneMapperCard extends HTMLElement {
         if (this.isDrawing) this.cancelDrawing();
       });
     }
+
+    // Entity selection events
+    const deviceSelect = this.shadowRoot.getElementById('deviceSelect');
+    const btnAddPair = this.shadowRoot.getElementById('btnAddPair');
+    const btnApplyEntities = this.shadowRoot.getElementById('btnApplyEntities');
+    const btnConfigToggle = this.shadowRoot.getElementById('btnConfigToggle');
+    const configContent = this.shadowRoot.getElementById('configContent');
+    if (btnConfigToggle && configContent) {
+      btnConfigToggle.addEventListener('click', () => {
+        this.showConfig = !this.showConfig;
+        configContent.classList.toggle('open', this.showConfig);
+        // update caret
+        btnConfigToggle.querySelector('span:last-child').textContent = this.showConfig ? '▾' : '▸';
+      });
+    }
+    if (deviceSelect) {
+      deviceSelect.addEventListener('change', () => {
+        this._selectedDeviceId = deviceSelect.value || null;
+        // When device changes, we can attempt to auto-suggest pairs if none exist
+        if (!this.trackedEntities || this.trackedEntities.length === 0) {
+          this._suggestPairsFromDevice();
+        }
+        this._renderEntitySelection();
+      });
+    }
+    if (btnAddPair) {
+      btnAddPair.addEventListener('click', () => {
+        this.trackedEntities = [...(this.trackedEntities || []), { x: '', y: '' }];
+        this._renderEntitySelection();
+      });
+    }
+    if (btnApplyEntities) {
+      btnApplyEntities.addEventListener('click', () => {
+        // Persist entity pairs to backend without changing zones
+        if (!this._hass) return;
+        const pairs = (this.trackedEntities || []).filter(p => p.x && p.y);
+        this._hass.callService('zone_mapper', 'update_zone', {
+          location: this.location,
+          entities: pairs
+        });
+        // Redraw points using latest selection
+        this.drawGrid();
+        this._notify('Entity pairs saved');
+      });
+    }
   }
 
   endDrawing(e) {
@@ -619,6 +695,7 @@ class ZoneMapperCard extends HTMLElement {
   updateZonesFromEntities() {
     if (!this._hass) return;
     const sanitizedDevice = this.location.toLowerCase().replace(/\s+/g, '_');
+    let restoredEntities = null;
     this.zoneConfig.forEach(zoneConf => {
       const entityId = `sensor.zone_mapper_${sanitizedDevice}_zone_${zoneConf.id}`;
       const state = this._hass.states[entityId];
@@ -640,8 +717,20 @@ class ZoneMapperCard extends HTMLElement {
           if (angleSlider) angleSlider.value = String(this.coneAngleDeg);
           if (angleLabel) angleLabel.textContent = `${this.coneAngleDeg}°`;
         }
+        // restore entity pairs if present
+        if (Array.isArray(state.attributes.entities) && state.attributes.entities.length) {
+          restoredEntities = state.attributes.entities;
+        }
       }
     });
+    if (restoredEntities && (!this.trackedEntities || this.trackedEntities.length === 0)) {
+      this.trackedEntities = restoredEntities.filter(p => p && p.x && p.y);
+      // Try to set selected device from first pair
+      const first = this.trackedEntities[0];
+      const eInfo = this._findEntityInfo(first?.x) || this._findEntityInfo(first?.y);
+      if (eInfo) this._selectedDeviceId = eInfo.device_id || null;
+      this._renderEntitySelection();
+    }
     this.drawGrid();
     this.updateZoneList();
   }
@@ -1064,6 +1153,156 @@ class ZoneMapperCard extends HTMLElement {
     document.removeEventListener('mousedown', this._outsideClickHandler, true);
     document.removeEventListener('touchstart', this._outsideClickHandler, true);
     if (this._canvasResizeObserver) this._canvasResizeObserver.disconnect();
+  }
+
+  async _ensureRegistriesLoaded() {
+    try {
+      const [devices, entities] = await Promise.all([
+        this._hass.callWS({ type: 'config/device_registry/list' }),
+        this._hass.callWS({ type: 'config/entity_registry/list' }),
+      ]);
+      this._devices = Array.isArray(devices) ? devices : [];
+      this._allEntities = Array.isArray(entities) ? entities : [];
+      // Try to pick a default device for the location if any entity matches restored pairs
+      if (!this._selectedDeviceId && this.trackedEntities && this.trackedEntities.length) {
+        const info = this._findEntityInfo(this.trackedEntities[0]?.x) || this._findEntityInfo(this.trackedEntities[0]?.y);
+        if (info) this._selectedDeviceId = info.device_id;
+      }
+      this._renderEntitySelection();
+    } catch (e) {
+      // Silently ignore; dropdowns will remain empty
+      // console.warn('Failed to load registries', e);
+    }
+  }
+
+  _renderEntitySelection() {
+    const devSel = this.shadowRoot?.getElementById('deviceSelect');
+    const pairsDiv = this.shadowRoot?.getElementById('entityPairs');
+    if (!devSel || !pairsDiv) return;
+
+    // Populate device select
+    devSel.innerHTML = '';
+    const devices = this._devices || [];
+    const mkOpt = (val, label) => {
+      const o = document.createElement('option');
+      o.value = val || '';
+      o.textContent = label;
+      return o;
+    };
+    devSel.appendChild(mkOpt('', '— Select device —'));
+    devices.forEach(d => {
+      const label = d.name_by_user || d.name || d.id;
+      const opt = mkOpt(d.id, label);
+      if (String(d.id) === String(this._selectedDeviceId)) opt.selected = true;
+      devSel.appendChild(opt);
+    });
+
+    // Build options for entities belonging to selected device (sensors only)
+    const deviceEntities = (this._allEntities || []).filter(e => !this._selectedDeviceId || e.device_id === this._selectedDeviceId);
+    const sensorEntityIds = deviceEntities
+      .filter(e => (e.entity_id || '').startsWith('sensor.'))
+      .map(e => e.entity_id)
+      .sort((a, b) => a.localeCompare(b));
+
+    // Render pairs
+    pairsDiv.innerHTML = '';
+    const pairs = this.trackedEntities && this.trackedEntities.length ? this.trackedEntities : [];
+    pairs.forEach((pair, idx) => {
+      const row = document.createElement('div');
+      row.className = 'entity-row';
+      const label = document.createElement('label');
+      label.textContent = `Target ${idx + 1}`;
+      const selX = document.createElement('select');
+      const selY = document.createElement('select');
+      const rmBtn = document.createElement('button');
+      rmBtn.textContent = 'Remove';
+      rmBtn.addEventListener('click', () => {
+        this.trackedEntities.splice(idx, 1);
+        this._renderEntitySelection();
+        this.drawGrid();
+      });
+
+      const addOptions = (sel, currentVal) => {
+        sel.innerHTML = '';
+        const noneOpt = document.createElement('option');
+        noneOpt.value = '';
+        noneOpt.textContent = '— Select entity —';
+        sel.appendChild(noneOpt);
+        sensorEntityIds.forEach(id => {
+          const o = document.createElement('option');
+          o.value = id;
+          o.textContent = id;
+          if (currentVal && id === currentVal) o.selected = true;
+          sel.appendChild(o);
+        });
+      };
+      addOptions(selX, pair.x);
+      addOptions(selY, pair.y);
+
+      selX.addEventListener('change', () => {
+        this.trackedEntities[idx].x = selX.value || '';
+        this.drawGrid();
+      });
+      selY.addEventListener('change', () => {
+        this.trackedEntities[idx].y = selY.value || '';
+        this.drawGrid();
+      });
+
+      row.appendChild(label);
+      row.appendChild(selX);
+      row.appendChild(selY);
+      row.appendChild(rmBtn);
+      pairsDiv.appendChild(row);
+    });
+  }
+
+  _findEntityInfo(entityId) {
+    if (!entityId) return null;
+    return (this._allEntities || []).find(e => e.entity_id === entityId) || null;
+  }
+
+  _suggestPairsFromDevice() {
+    if (!this._selectedDeviceId) return;
+    const list = (this._allEntities || []).filter(e => e.device_id === this._selectedDeviceId && (e.entity_id || '').startsWith('sensor.'));
+    // Heuristic: group by suffix _x/_y or contains 'x'/'y'
+    const xs = list.filter(e => /(^|[_\-])x(\b|[_\-])/.test(e.entity_id) || /_x$/.test(e.entity_id));
+    const ys = list.filter(e => /(^|[_\-])y(\b|[_\-])/.test(e.entity_id) || /_y$/.test(e.entity_id));
+    const pairs = [];
+    const used = new Set();
+    // Try to pair by replacing x->y in name
+    xs.forEach(xe => {
+      const guessY = xe.entity_id.replace(/x(?!.*x)/, 'y').replace(/_x(?!.*_x)/, '_y');
+      const ye = list.find(e => e.entity_id === guessY) || ys.find(e => !used.has(e.entity_id));
+      if (ye) {
+        used.add(ye.entity_id);
+        pairs.push({ x: xe.entity_id, y: ye.entity_id });
+      }
+    });
+    // Fallback: take numeric-looking entities two by two
+    if (pairs.length === 0) {
+      const numeric = list.map(e => e.entity_id).filter(id => {
+        const st = this._hass?.states[id];
+        return st && st.state !== 'unknown' && st.state !== 'unavailable' && !Number.isNaN(parseFloat(st.state));
+      });
+      for (let i = 0; i + 1 < numeric.length; i += 2) {
+        pairs.push({ x: numeric[i], y: numeric[i + 1] });
+      }
+    }
+    if (pairs.length) {
+      this.trackedEntities = pairs;
+    }
+  }
+
+  _notify(message) {
+    try {
+      const ev = new Event('hass-notification', { bubbles: true, composed: true });
+      ev.detail = { message };
+      this.dispatchEvent(ev);
+    } catch (e) {
+      // Fallback
+      // eslint-disable-next-line no-alert
+      alert(message);
+    }
   }
 }
 
