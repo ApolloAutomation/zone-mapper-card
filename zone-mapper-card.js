@@ -41,9 +41,9 @@ class ZoneMapperCard extends HTMLElement {
       type: 'custom:zone-mapper-card',
       location: 'Office',
       dark_mode: false,
-      // Optional generator-style inputs (default behavior)
-      // When provided (and direct_entity is not true), the card will auto-build
-      // X/Y entity ids as: sensor.<device>_<id>_<sensor>_target_<n>_<x|y>
+      // By default, use the in-card dropdowns to select a device and X/Y entities.
+      // Optionally, you can provide explicit entities by setting direct_entity: true
+      // and listing pairs below.
       zones: [
         { id: 1, name: 'Zone 1' },
         { id: 2, name: 'Zone 2' },
@@ -61,13 +61,10 @@ class ZoneMapperCard extends HTMLElement {
         fov_deg: 120,
         angle_deg: 0,
       },
-      // To use explicit entity ids instead of generator, set direct_entity: true and
-      // provide the entities array in the style shown below.
       // direct_entity: true,
       // entities: [
-      //   { x1: 'sensor.apollo_r_pro_1_w_351af0_ld2450_target_1_x' },
-      //   { y1: 'sensor.apollo_r_pro_1_w_351af0_ld2450_target_1_y' },
-      //   ...
+      //   { x1: 'sensor.some_device_target_1_x' },
+      //   { y1: 'sensor.some_device_target_1_y' },
       // ],
     };
   }
@@ -85,11 +82,7 @@ class ZoneMapperCard extends HTMLElement {
     // Resolve location name used for UI, entity restoration, and backend
     this.location = String(config.location);
 
-    // Generator inputs (optional)
-    this.devicePrefix = config.device !== undefined ? String(config.device) : undefined;
-    this.deviceId = config.id !== undefined ? String(config.id) : undefined;
-    this.sensorName = config.sensor !== undefined ? String(config.sensor) : undefined;
-    this.targetCount = Number(config.target_count);
+    // Direct entity mode (optional). Otherwise, use dropdowns in the UI.
     this.directEntity = !!config.direct_entity;
 
     this.zoneConfig = config.zones;
@@ -168,20 +161,8 @@ class ZoneMapperCard extends HTMLElement {
     if (cfg && cfg.direct_entity) {
       return this.processEntityConfig(cfg.entities);
     }
-    const dev = this.devicePrefix;
-    const id = this.deviceId;
-    const sensor = this.sensorName;
-    const count = Number.isFinite(this.targetCount) ? Math.max(0, Math.floor(this.targetCount)) : 0;
-    if (dev && id && sensor && count > 0) {
-      const pairs = [];
-      for (let i = 1; i <= count; i++) {
-        const base = `sensor.${dev}_${id}_${sensor}_target_${i}`;
-        pairs.push({ x: `${base}_x`, y: `${base}_y` });
-      }
-      return pairs;
-    }
-    // Fallback to explicit entities if provided
-    return this.processEntityConfig(cfg?.entities);
+    // Default: no preconfigured pairs; user selects via dropdowns
+    return [];
   }
 
   render() {
@@ -524,10 +505,15 @@ class ZoneMapperCard extends HTMLElement {
     if (deviceSelect) {
       deviceSelect.addEventListener('change', () => {
         this._selectedDeviceId = deviceSelect.value || null;
-        // When device changes, we can attempt to auto-suggest pairs if none exist
-        if (!this.trackedEntities || this.trackedEntities.length === 0) {
-          this._suggestPairsFromDevice();
+        // If no device selected, clear any existing target rows
+        if (!this._selectedDeviceId) {
+          this.trackedEntities = [];
+          this._renderEntitySelection();
+          this.drawGrid();
+          return;
         }
+        // When device changes, auto-suggest pairs for the new device, replacing existing pairs.
+        this._suggestPairsFromDevice(true);
         this._renderEntitySelection();
       });
     }
@@ -1261,8 +1247,8 @@ class ZoneMapperCard extends HTMLElement {
     return (this._allEntities || []).find(e => e.entity_id === entityId) || null;
   }
 
-  _suggestPairsFromDevice() {
-    if (!this._selectedDeviceId) return;
+  _suggestPairsFromDevice(forceReplace = false) {
+    if (!this._selectedDeviceId) return false;
     const list = (this._allEntities || []).filter(e => e.device_id === this._selectedDeviceId && (e.entity_id || '').startsWith('sensor.'));
     // Heuristic: group by suffix _x/_y or contains 'x'/'y'
     const xs = list.filter(e => /(^|[_\-])x(\b|[_\-])/.test(e.entity_id) || /_x$/.test(e.entity_id));
@@ -1289,8 +1275,18 @@ class ZoneMapperCard extends HTMLElement {
       }
     }
     if (pairs.length) {
-      this.trackedEntities = pairs;
+      // Replace existing pairs when forced or when nothing is set yet
+      if (forceReplace || !this.trackedEntities || this.trackedEntities.length === 0) {
+        this.trackedEntities = pairs;
+        return true;
+      }
+      return false;
     }
+    // If forced and no pairs found, clear to avoid stale pairs from previous device
+    if (forceReplace) {
+      this.trackedEntities = [];
+    }
+    return false;
   }
 
   _notify(message) {
