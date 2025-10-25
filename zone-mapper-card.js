@@ -13,6 +13,8 @@ class ZoneMapperCard extends HTMLElement {
     this._allEntities = [];
     this._selectedDeviceId = null;
     this.showConfig = false;
+    this.showDeviceTargets = true;
+    this.showZones = true;
     // Drawing modes: 'rect' | 'ellipse' | 'polygon'
     this.drawMode = 'rect';
     this._polyPoints = [];
@@ -42,13 +44,8 @@ class ZoneMapperCard extends HTMLElement {
       location: 'Office',
       dark_mode: false,
       // By default, use the in-card dropdowns to select a device and X/Y entities.
-      // Optionally, you can provide explicit entities by setting direct_entity: true
-      // and listing pairs below.
-      zones: [
-        { id: 1, name: 'Zone 1' },
-        { id: 2, name: 'Zone 2' },
-        { id: 3, name: 'Zone 3' },
-      ],
+      // Zones can be managed in-card; you can optionally pre-seed a list here:
+      // zones: [ { id: 1, name: 'Zone 1' } ],
       grid: {
         x_min: -5000,
         x_max: 5000,
@@ -74,9 +71,6 @@ class ZoneMapperCard extends HTMLElement {
     if (!config.location) {
       throw new Error("You must specify a location.");
     }
-    if (!config.zones || !Array.isArray(config.zones)) {
-      throw new Error("You must specify a list of zones.");
-    }
 
     this.config = config;
     // Resolve location name used for UI, entity restoration, and backend
@@ -85,7 +79,7 @@ class ZoneMapperCard extends HTMLElement {
     // Direct entity mode (optional). Otherwise, use dropdowns in the UI.
     this.directEntity = !!config.direct_entity;
 
-    this.zoneConfig = config.zones;
+    this.zoneConfig = Array.isArray(config.zones) ? [...config.zones] : [];
     this.trackedEntities = this.buildTrackedEntities(config);
 
     if (config.dark_mode !== undefined) {
@@ -207,6 +201,8 @@ class ZoneMapperCard extends HTMLElement {
         .config-title { font-weight: 600; }
         .config-content { padding: 8px 0; display: none; }
         .config-content.open { display: block; }
+        .subsection-header { display: flex; align-items: center; justify-content: space-between; cursor: pointer; padding: 8px 12px; background: var(--secondary-background-color); border-radius: 4px; margin-top: 8px; }
+        .subsection-title { font-weight: 600; }
       </style>
       <div class="container ${this.darkMode ? 'dark' : ''}">
         <div class="device-title">Location: ${this.location}</div>
@@ -234,22 +230,42 @@ class ZoneMapperCard extends HTMLElement {
             <span>${this.showConfig ? '▾' : '▸'}</span>
           </div>
           <div id="configContent" class="config-content ${this.showConfig ? 'open' : ''}">
-            <div class="entity-selection">
-              <div class="entity-controls">
-                <label for="deviceSelect" class="subtle">Device</label>
-                <select id="deviceSelect"></select>
-                <span class="subtle">Select the HA device that owns your X/Y sensor entities.</span>
-              </div>
-              <div id="entityPairs"></div>
-              <div class="pair-actions">
-                <button id="btnAddPair" title="Add X/Y pair">Add X/Y Pair</button>
-                <button id="btnApplyEntities" title="Save entity pairs to backend">Apply</button>
+            <div class="subsection-header" id="toggleDeviceTargets">
+              <span class="subsection-title">Device and Targets</span>
+              <span id="caretDeviceTargets">${this.showDeviceTargets ? '▾' : '▸'}</span>
+            </div>
+            <div class="config-content ${this.showDeviceTargets ? 'open' : ''}" id="sectionDeviceTargets">
+              <div class="entity-selection">
+                <div class="entity-controls">
+                  <label for="deviceSelect" class="subtle">Device</label>
+                  <select id="deviceSelect"></select>
+                  <span class="subtle">Select the HA device that owns your X/Y sensor entities.</span>
+                </div>
+                <div id="entityPairs"></div>
+                <div class="pair-actions">
+                  <button id="btnAddPair" title="Add X/Y pair">Add X/Y Pair</button>
+                  <button id="btnApplyEntities" title="Save entity pairs to backend">Apply</button>
+                </div>
               </div>
             </div>
             <div class="controls" id="cone-controls">
               <label for="coneAngleSlider">Cone rotation: </label>
               <input type="range" id="coneAngleSlider" min="-180" max="180" step="1" value="${this.coneAngleDeg}" />
               <span id="coneAngleLabel">${this.coneAngleDeg}°</span>
+            </div>
+            <div class="subsection-header" id="toggleZones">
+              <span class="subsection-title">Zones</span>
+              <span id="caretZones">${this.showZones ? '▾' : '▸'}</span>
+            </div>
+            <div class="config-content ${this.showZones ? 'open' : ''}" id="sectionZones">
+              <div class="entity-selection">
+                <div class="entity-controls">
+                  <div class="pair-actions">
+                    <button id="btnAddZone" title="Add new zone">Add Zone</button>
+                  </div>
+                  <div id="zoneManager"></div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -263,6 +279,7 @@ class ZoneMapperCard extends HTMLElement {
     this.setupCanvas();
     this.attachEventListeners();
     this._renderEntitySelection();
+    this._renderZoneManager();
     if (this._hass) {
       this.updateZonesFromEntities();
     }
@@ -494,6 +511,13 @@ class ZoneMapperCard extends HTMLElement {
     const btnApplyEntities = this.shadowRoot.getElementById('btnApplyEntities');
     const btnConfigToggle = this.shadowRoot.getElementById('btnConfigToggle');
     const configContent = this.shadowRoot.getElementById('configContent');
+    const btnAddZone = this.shadowRoot.getElementById('btnAddZone');
+    const toggleDeviceTargets = this.shadowRoot.getElementById('toggleDeviceTargets');
+    const caretDeviceTargets = this.shadowRoot.getElementById('caretDeviceTargets');
+    const sectionDeviceTargets = this.shadowRoot.getElementById('sectionDeviceTargets');
+    const toggleZones = this.shadowRoot.getElementById('toggleZones');
+    const caretZones = this.shadowRoot.getElementById('caretZones');
+    const sectionZones = this.shadowRoot.getElementById('sectionZones');
     if (btnConfigToggle && configContent) {
       btnConfigToggle.addEventListener('click', () => {
         this.showConfig = !this.showConfig;
@@ -535,6 +559,23 @@ class ZoneMapperCard extends HTMLElement {
         // Redraw points using latest selection
         this.drawGrid();
         this._notify('Entity pairs saved');
+      });
+    }
+    if (btnAddZone) {
+      btnAddZone.addEventListener('click', () => this._handleAddZone());
+    }
+    if (toggleDeviceTargets && sectionDeviceTargets && caretDeviceTargets) {
+      toggleDeviceTargets.addEventListener('click', () => {
+        this.showDeviceTargets = !this.showDeviceTargets;
+        sectionDeviceTargets.classList.toggle('open', this.showDeviceTargets);
+        caretDeviceTargets.textContent = this.showDeviceTargets ? '▾' : '▸';
+      });
+    }
+    if (toggleZones && sectionZones && caretZones) {
+      toggleZones.addEventListener('click', () => {
+        this.showZones = !this.showZones;
+        sectionZones.classList.toggle('open', this.showZones);
+        caretZones.textContent = this.showZones ? '▾' : '▸';
       });
     }
   }
@@ -682,31 +723,49 @@ class ZoneMapperCard extends HTMLElement {
     if (!this._hass) return;
     const sanitizedDevice = this.location.toLowerCase().replace(/\s+/g, '_');
     let restoredEntities = null;
-    this.zoneConfig.forEach(zoneConf => {
-      const entityId = `sensor.zone_mapper_${sanitizedDevice}_zone_${zoneConf.id}`;
+    // Discover zone sensors dynamically if none are configured
+    let zoneIds = new Set((this.zoneConfig || []).map(z => Number(z.id)));
+    if (!this.zoneConfig || this.zoneConfig.length === 0) {
+      Object.keys(this._hass.states || {}).forEach(eid => {
+        const m = eid.match(/^sensor\.zone_mapper_([a-z0-9_]+)_zone_(\d+)$/);
+        if (m && m[1] === sanitizedDevice) zoneIds.add(Number(m[2]));
+      });
+      // Initialize local config based on discovery (if still empty)
+      if (this.zoneConfig.length === 0 && zoneIds.size > 0) {
+        this.zoneConfig = Array.from(zoneIds).sort((a, b) => a - b).map(id => ({ id, name: `Zone ${id}` }));
+        this.renderZoneButtons();
+        this._renderZoneManager();
+      }
+    }
+    // Load each zone's attributes/state
+    Array.from(zoneIds).forEach(id => {
+      const entityId = `sensor.zone_mapper_${sanitizedDevice}_zone_${id}`;
       const state = this._hass.states[entityId];
-      if (state && state.attributes) {
-        if ('shape' in state.attributes) {
-          const shape = state.attributes.shape;
-          const data = state.attributes.data;
-            if (data) {
-              const z = { id: zoneConf.id, shape, ...data };
-              const existingZone = this.zones.find(zz => zz.id === zoneConf.id);
-              if (existingZone) Object.assign(existingZone, z); else this.zones.push(z);
-            }
+      if (!state || !state.attributes) return;
+      const attrs = state.attributes;
+      if ('shape' in attrs) {
+        const shape = attrs.shape;
+        const data = attrs.data;
+        if (data) {
+          const z = { id, shape, ...data };
+          const existingZone = this.zones.find(zz => zz.id === id);
+          if (existingZone) Object.assign(existingZone, z); else this.zones.push(z);
         }
-        // restore rotation if available
-        if (typeof state.attributes.rotation_deg === 'number') {
-          this.coneAngleDeg = Math.max(-180, Math.min(180, Math.round(state.attributes.rotation_deg)));
-          const angleSlider = this.shadowRoot.getElementById('coneAngleSlider');
-          const angleLabel = this.shadowRoot.getElementById('coneAngleLabel');
-          if (angleSlider) angleSlider.value = String(this.coneAngleDeg);
-          if (angleLabel) angleLabel.textContent = `${this.coneAngleDeg}°`;
-        }
-        // restore entity pairs if present
-        if (Array.isArray(state.attributes.entities) && state.attributes.entities.length) {
-          restoredEntities = state.attributes.entities;
-        }
+      }
+      // name propagation from backend (if present)
+      if (attrs.name) {
+        const zc = this.zoneConfig.find(z => Number(z.id) === Number(id));
+        if (zc) zc.name = attrs.name;
+      }
+      if (typeof attrs.rotation_deg === 'number') {
+        this.coneAngleDeg = Math.max(-180, Math.min(180, Math.round(attrs.rotation_deg)));
+        const angleSlider = this.shadowRoot.getElementById('coneAngleSlider');
+        const angleLabel = this.shadowRoot.getElementById('coneAngleLabel');
+        if (angleSlider) angleSlider.value = String(this.coneAngleDeg);
+        if (angleLabel) angleLabel.textContent = `${this.coneAngleDeg}°`;
+      }
+      if (Array.isArray(attrs.entities) && attrs.entities.length) {
+        restoredEntities = attrs.entities;
       }
     });
     if (restoredEntities && (!this.trackedEntities || this.trackedEntities.length === 0)) {
@@ -719,6 +778,87 @@ class ZoneMapperCard extends HTMLElement {
     }
     this.drawGrid();
     this.updateZoneList();
+  }
+
+  _renderZoneManager() {
+    const host = this.shadowRoot?.getElementById('zoneManager');
+    if (!host) return;
+    host.innerHTML = '';
+    const zones = (this.zoneConfig || []).slice().sort((a, b) => Number(a.id) - Number(b.id));
+    zones.forEach(z => {
+      const row = document.createElement('div');
+      row.className = 'entity-row';
+      const label = document.createElement('label');
+      label.textContent = `Zone ${z.id}`;
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.value = z.name || `Zone ${z.id}`;
+      input.placeholder = `Zone ${z.id}`;
+      const saveBtn = document.createElement('button');
+      saveBtn.textContent = 'Save';
+      const delBtn = document.createElement('button');
+      delBtn.textContent = 'Delete';
+
+      saveBtn.addEventListener('click', () => {
+        const newName = input.value?.trim() || `Zone ${z.id}`;
+        z.name = newName;
+        // Persist the friendly name to backend (no shape/data change)
+        if (this._hass) {
+          this._hass.callService('zone_mapper', 'update_zone', {
+            location: this.location,
+            zone_id: z.id,
+            name: newName,
+          });
+        }
+        this.renderZoneButtons();
+        this.drawGrid();
+      });
+
+      delBtn.addEventListener('click', () => {
+        // Delete the zone and remove its entities
+        if (this._hass) {
+          this._hass.callService('zone_mapper', 'update_zone', {
+            location: this.location,
+            zone_id: z.id,
+            delete: true,
+          });
+        }
+        // Remove from UI state
+        this.zoneConfig = (this.zoneConfig || []).filter(zz => String(zz.id) !== String(z.id));
+        this.zones = (this.zones || []).filter(zz => String(zz.id) !== String(z.id));
+        if (String(this.selectedZone) === String(z.id)) this.selectedZone = null;
+        this.renderZoneButtons();
+        this._renderZoneManager();
+        this.drawGrid();
+      });
+
+      row.appendChild(label);
+      row.appendChild(input);
+      row.appendChild(saveBtn);
+      row.appendChild(delBtn);
+      host.appendChild(row);
+    });
+  }
+
+  _handleAddZone() {
+    // Compute next available id
+    const ids = new Set([...(this.zoneConfig || []).map(z => Number(z.id)), ...(this.zones || []).map(z => Number(z.id))]);
+    let next = 1;
+    while (ids.has(next)) next += 1;
+    const newZone = { id: next, name: `Zone ${next}` };
+    this.zoneConfig = [...(this.zoneConfig || []), newZone];
+    // Persist empty zone with name so entities are created and named
+    if (this._hass) {
+      this._hass.callService('zone_mapper', 'update_zone', {
+        location: this.location,
+        zone_id: next,
+        shape: 'none',
+        data: null,
+        name: newZone.name,
+      });
+    }
+    this.renderZoneButtons();
+    this._renderZoneManager();
   }
 
   finishPolygon() {
