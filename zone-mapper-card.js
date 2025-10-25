@@ -41,9 +41,13 @@ class ZoneMapperCard extends HTMLElement {
       type: 'custom:zone-mapper-card',
       location: 'Office',
       dark_mode: false,
-      // By default, use the in-card dropdowns to select a device and X/Y entities.
-      // Optionally, you can provide explicit entities by setting direct_entity: true
-      // and listing pairs below.
+      // Optional generator-style inputs (default behavior)
+      // When provided (and direct_entity is not true), the card will auto-build
+      // X/Y entity ids as: sensor.<device>_<id>_<sensor>_target_<n>_<x|y>
+      device: 'device name',
+      id: 'unique id',
+      sensor: 'ld2450',
+      target_count: 3,
       zones: [
         { id: 1, name: 'Zone 1' },
         { id: 2, name: 'Zone 2' },
