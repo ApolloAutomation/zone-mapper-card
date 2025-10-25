@@ -16,6 +16,7 @@ A custom Lovelace card for Home Assistant that lets you draw 2D detection zones 
 - Compact UI:
   - Bottom‑left: a single ✎ “Draw” button toggles a vertical menu of modes (▭ Rect, ◯ Ellipse, ⬠ Polygon) that appears above it
   - Bottom‑right: 🔒 Lock toggle prevents accidental edits (disables drawing and cancels in‑progress)
+  - Device and Entity pickers: choose a HA device and select X/Y sensor entity pairs directly from dropdowns; click Apply to persist
 
 ## Requirements
 
@@ -161,6 +162,13 @@ mode: single
 7. Toggle 🔒 to lock/unlock drawing.
 8. Target dots are drawn in different colors using the current X/Y sensor values and are rotated by the current angle.
 9. Rotate the helper “device cone” with the slider (−180..180). This also updates backend `rotation_deg` and persists across restarts. The cone displays ±(fov_deg/2). Adjust `cone.y_max` for displayed range.
+
+Entity selection in the card:
+
+- Use the Device dropdown to filter entities by a specific HA device.
+- Add one or more X/Y pairs via “Add X/Y Pair”. Each row offers two dropdowns listing sensor entities on that device.
+- A colored dot next to each select indicates whether the current state is a valid number (green) or not (red).
+- Click Apply to save the selected entity pairs to the backend without changing any zone shapes. These persist on the coordinate sensor attributes and restore on reload.
 
 ## Mobile and touch support
 
