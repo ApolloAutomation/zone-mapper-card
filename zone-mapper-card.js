@@ -75,6 +75,18 @@ const DEFAULT_CONE = Object.freeze({
 
 const POLYGON_MAX_POINTS = 32;
 
+function slugifyLocation(value) {
+  if (!value) return '';
+  let text = String(value)
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+  text = text.replace(/[^a-z0-9]+/g, '_');
+  text = text.replace(/^_+|_+$/g, '');
+  text = text.replace(/_{2,}/g, '_');
+  return text || 'unknown';
+}
+
 class ZoneMapperCard extends HTMLElement {
   constructor() {
     super();
@@ -230,7 +242,6 @@ class ZoneMapperCard extends HTMLElement {
         button { padding: 8px 16px; background: var(--primary-color); color: ${COLOR.ui.primaryButtonText}; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; }
         .container.dark button { background: ${COLOR.ui.darkPrimaryButton}; }
         button:hover { opacity: 0.9; }
-        /* Chip-like zone buttons */
         button.zone-btn {
           padding: 6px 10px;
           border-radius: 999px;
@@ -258,7 +269,6 @@ class ZoneMapperCard extends HTMLElement {
         .container.dark .info { color: ${COLOR.ui.infoDarkText}; }
         .container.dark .zone-item { background: ${COLOR.ui.zoneItemDarkBg}; color: ${COLOR.ui.zoneItemDarkText}; }
         .entity-selection { margin: 4px 0; padding: 0; background: transparent; border-radius: 0; }
-        /* Denser row layout */
         .entity-row { display: grid; grid-template-columns: auto 1fr 1fr auto; gap: 6px; align-items: center; margin: 6px 0; }
         .entity-row label { font-weight: 600; opacity: 0.95; }
         .entity-row select { width: 100%; padding: 2px 6px; border: 1px solid var(--divider-color); border-radius: 6px; background: var(--card-background-color); color: var(--primary-text-color); font-size: 12px; height: 28px; }
@@ -271,7 +281,6 @@ class ZoneMapperCard extends HTMLElement {
         .config { margin-top: 0; }
         .config-header { display: flex; align-items: center; justify-content: space-between; cursor: pointer; padding: 4px 0; background: transparent; border-radius: 0; }
         .config-title { font-weight: 600; }
-        /* Smooth collapse/expand */
         .config-content { max-height: 0; overflow: hidden; transition: max-height 200ms ease, padding 200ms ease; padding: 0; }
         .config-content.open { max-height: 1200px; padding: 4px 0; }
         .subsection-header { display: flex; align-items: center; justify-content: space-between; cursor: pointer; padding: 4px 0; background: transparent; border-radius: 0; margin-top: 4px; }
@@ -413,10 +422,10 @@ class ZoneMapperCard extends HTMLElement {
     if (pixelX >= 0 && pixelX <= this.canvas.width && pixelY >= 0 && pixelY <= this.canvas.height) {
       ctx.fillStyle = color;
       ctx.beginPath();
-      ctx.arc(pixelX, pixelY, 6, 0, 2 * Math.PI);
+      ctx.arc(pixelX, pixelY, 10, 0, 2 * Math.PI);
       ctx.fill();
       ctx.strokeStyle = COLOR.canvas.targetStroke;
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 3;
       ctx.stroke();
     }
   }
@@ -990,7 +999,7 @@ class ZoneMapperCard extends HTMLElement {
 
   updateZonesFromEntities() {
     if (!this._hass) return;
-    const sanitizedDevice = this.location.toLowerCase().replace(/\s+/g, '_');
+    const sanitizedDevice = slugifyLocation(this.location);
     let restoredEntities = null;
     let namesUpdated = false;
     // Discover zone sensors dynamically if none are configured
@@ -1248,7 +1257,7 @@ class ZoneMapperCard extends HTMLElement {
       const color = colors[(Number(zone.id) - 1) % colors.length] || colors[idx % colors.length];
       ctx.strokeStyle = color.replace('0.30', '1');
       ctx.fillStyle = color;
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 3;
       let bbox = null; // {x,y,width,height}
       if (zone.shape === DRAW_MODES.RECT) {
         const { x_min, x_max, y_min, y_max } = zone.data;
@@ -1294,7 +1303,7 @@ class ZoneMapperCard extends HTMLElement {
             if (pts[i].x > maxX) maxX = pts[i].x;
             if (pts[i].y > maxY) maxY = pts[i].y;
           }
-            bbox = { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+          bbox = { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
         }
       }
       if (bbox && bbox.width > 20 && bbox.height > 14) {
@@ -1311,7 +1320,7 @@ class ZoneMapperCard extends HTMLElement {
       if (pts.length >= 2) {
         ctx.save();
         ctx.strokeStyle = this.darkMode ? COLOR.canvas.polygonStrokeDark : COLOR.canvas.polygonStrokeLight;
-        ctx.lineWidth = 2;
+        ctx.lineWidth = 3;
         ctx.setLineDash([]);
         ctx.beginPath();
         ctx.moveTo(pts[0].x, pts[0].y);
@@ -1325,7 +1334,7 @@ class ZoneMapperCard extends HTMLElement {
         const previewColor = this.darkMode ? COLOR.canvas.polygonPreviewDark : COLOR.canvas.polygonPreviewLight;
         ctx.save();
         ctx.strokeStyle = previewColor;
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = 2;
         ctx.setLineDash([6, 6]);
         ctx.beginPath();
         const anchor = pts.length ? pts[pts.length - 1] : { x: this.startPoint?.x ?? null, y: this.startPoint?.y ?? null };
@@ -1349,7 +1358,7 @@ class ZoneMapperCard extends HTMLElement {
         ctx.arc(pt.x, pt.y, 3.5, 0, Math.PI * 2);
         ctx.fillStyle = fill;
         ctx.fill();
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = 2;
         ctx.strokeStyle = stroke;
         ctx.stroke();
       }
@@ -1359,7 +1368,7 @@ class ZoneMapperCard extends HTMLElement {
         ctx.arc(this.startPoint.x, this.startPoint.y, 3.5, 0, Math.PI * 2);
         ctx.fillStyle = fill;
         ctx.fill();
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = 2;
         ctx.strokeStyle = stroke;
         ctx.stroke();
       }
@@ -1375,7 +1384,7 @@ class ZoneMapperCard extends HTMLElement {
       ctx.arc(pt.x, pt.y, 3.5, 0, Math.PI * 2);
       ctx.fillStyle = fill;
       ctx.fill();
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = 2;
       ctx.strokeStyle = stroke;
       ctx.stroke();
       ctx.restore();

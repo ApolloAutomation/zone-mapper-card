@@ -145,9 +145,10 @@ mode: single
 ```
 
 ## Notes
+
 - Entities are created on first update for a location; draw a zone once to initialize
 - Coordinates are rounded to the nearest millimeter by the backend
-- The `location` is slugified (lowercase, spaces → underscores) to locate coordinate sensors: `sensor.zone_mapper_<slug(location)>_zone_<id>`
+- The `location` is slugified using Home Assistant's rules (lowercase, punctuation removed, accents stripped, spaces → underscores) to locate coordinate sensors: `sensor.zone_mapper_<slug(location)>_zone_<id>`
 - Example: `location: "Office"` → `sensor.zone_mapper_office_zone_1`
 
 ## Using the card
