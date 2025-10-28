@@ -2,37 +2,36 @@ class ZoneMapperCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
+    // Defaults
     this.darkMode = false;
-    this.zones = [];
-    this.selectedZone = null;
     this.isDrawing = false;
     this.startPoint = null;
+    this._cursorPoint = null;
     this.entitiesPopulated = false;
     this.trackedEntities = [];
-    this._devices = [];
-    this._allEntities = [];
     this._selectedDeviceId = null;
+    this.showZones = false;
     this.showConfig = false;
-    // Drawing modes: 'rect' | 'ellipse' | 'polygon'
-    this.drawMode = 'rect';
+    this.showDeviceTargets = false;
     this._polyPoints = [];
-
-    // Default card grid ranges in millimeters
+    this.zones = [];
+    this.zoneConfig = [];
+    this.selectedZone = null;
+    // Grid defaults (mm)
     this.xMin = -5000;
     this.xMax = 5000;
     this.yMin = 0;
     this.yMax = 10000;
-
-    // Helper device FOV overlay settings
-    // coneYMax is the displayed range (mm). FOV is total degrees (default 120° => ±60°).
+    // Cone defaults
     this.coneYMax = 6000;
     this.coneFovDeg = 120;
     this.coneAngleDeg = 0;
     this.coneAngleDefault = 0;
+    // Drawing/UI
     this.polyMaxPoints = 32;
-    // UI state
-    this.showModeMenu = false; // collapsible draw mode menu
-    this.isLocked = false;     // lock drawing interactions
+    this.drawMode = 'rect';
+    this.showModeMenu = false;
+    this.isLocked = false;
   }
 
   // Default stub config
@@ -41,18 +40,9 @@ class ZoneMapperCard extends HTMLElement {
       type: 'custom:zone-mapper-card',
       location: 'Office',
       dark_mode: false,
-      // Optional generator-style inputs (default behavior)
-      // When provided (and direct_entity is not true), the card will auto-build
-      // X/Y entity ids as: sensor.<device>_<id>_<sensor>_target_<n>_<x|y>
-      device: 'device name',
-      id: 'unique id',
-      sensor: 'ld2450',
-      target_count: 3,
-      zones: [
-        { id: 1, name: 'Zone 1' },
-        { id: 2, name: 'Zone 2' },
-        { id: 3, name: 'Zone 3' },
-      ],
+      // By default, use the in-card dropdowns to select a device and X/Y entities.
+      // Zones can be managed in-card; you can optionally pre-seed a list here:
+      // zones: [ { id: 1, name: 'Zone 1' } ],
       grid: {
         x_min: -5000,
         x_max: 5000,
@@ -78,9 +68,6 @@ class ZoneMapperCard extends HTMLElement {
     if (!config.location) {
       throw new Error("You must specify a location.");
     }
-    if (!config.zones || !Array.isArray(config.zones)) {
-      throw new Error("You must specify a list of zones.");
-    }
 
     this.config = config;
     // Resolve location name used for UI, entity restoration, and backend
@@ -89,7 +76,7 @@ class ZoneMapperCard extends HTMLElement {
     // Direct entity mode (optional). Otherwise, use dropdowns in the UI.
     this.directEntity = !!config.direct_entity;
 
-    this.zoneConfig = config.zones;
+    this.zoneConfig = Array.isArray(config.zones) ? [...config.zones] : [];
     this.trackedEntities = this.buildTrackedEntities(config);
 
     if (config.dark_mode !== undefined) {
@@ -160,7 +147,6 @@ class ZoneMapperCard extends HTMLElement {
     return Object.values(entityPairs).filter(pair => pair.x && pair.y);
   }
 
-  // build tracked entities from config. Defaults to generator unless direct_entity is true.
   buildTrackedEntities(cfg) {
     if (cfg && cfg.direct_entity) {
       return this.processEntityConfig(cfg.entities);
@@ -173,44 +159,79 @@ class ZoneMapperCard extends HTMLElement {
     this.shadowRoot.innerHTML = `
       <style>
         :host { display: block; padding: 16px; }
-        .container { background: var(--card-background-color); border-radius: var(--ha-card-border-radius); box-shadow: var(--ha-card-box-shadow); padding: 16px; }
+        /* Theme tokens */
+        :host {
+          --zm-gap: 8px;
+          --zm-radius: 10px;
+          --zm-chip-bg: var(--secondary-background-color);
+          --zm-chip-active: var(--primary-color);
+          --zm-chip-color: var(--primary-text-color);
+        }
+        .container { background: var(--card-background-color); border-radius: var(--ha-card-border-radius, 12px); box-shadow: var(--ha-card-box-shadow); padding: 16px; }
         .container.dark { background: #1e1f23; color: #eceff4; }
         .container.dark .canvas-container { border-color: #3a3d45; background: #121316; }
-        .canvas-container { position: relative; width: 100%; aspect-ratio: 1; border: 2px solid var(--divider-color); border-radius: 4px; overflow: hidden; background: #fafafa; isolation: isolate; }
+        .canvas-container { position: relative; width: 100%; aspect-ratio: 1; border: 1px solid var(--divider-color); border-radius: var(--zm-radius); overflow: hidden; background: #ffffff; isolation: isolate; }
         canvas { width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
         .overlay-controls { position: absolute; bottom: 4px; display: flex; gap: 4px; z-index: 1; }
         .overlay-controls-left { left: 4px; flex-direction: column; align-items: flex-start; }
         .overlay-controls-right { right: 4px; }
-        .overlay-controls button { width: 30px; height: 30px; padding: 0; background: rgba(0,0,0,0.55); color: #fff; border: 1px solid rgba(255,255,255,0.3); border-radius: 4px; font-size: 11px; line-height: 1; cursor: pointer; backdrop-filter: blur(4px); }
-        .container.dark .overlay-controls button { background: rgba(255,255,255,0.18); color: #fff; border-color: rgba(255,255,255,0.35); }
+        .overlay-controls button { width: 30px; height: 30px; padding: 0; background: rgba(0,0,0,0.50); color: #fff; border: 1px solid rgba(255,255,255,0.25); border-radius: 8px; font-size: 11px; line-height: 1; cursor: pointer; backdrop-filter: blur(4px); }
+        .container.dark .overlay-controls button { background: rgba(255,255,255,0.16); color: #fff; border-color: rgba(255,255,255,0.25); }
         .overlay-controls button.active { outline: 2px solid #4caf50; }
         .overlay-controls button:disabled { opacity: 0.4; cursor: default; }
-        .controls { margin-bottom: 16px; display: flex; gap: 8px; flex-wrap: wrap; }
+        .controls { margin: 12px 0; display: flex; gap: var(--zm-gap); flex-wrap: wrap; }
         #cone-controls { align-items: center; padding-top: 8px; }
         #coneAngleSlider { flex: 1; min-width: 160px; }
-        button { padding: 8px 16px; background: var(--primary-color); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        button { padding: 8px 16px; background: var(--primary-color); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; }
         .container.dark button { background: #2d7dd2; }
         button:hover { opacity: 0.9; }
-        button.zone-btn { background: var(--primary-color); }
-        button.zone-btn.active { background: var(--accent-color); }
+        /* Chip-like zone buttons */
+        button.zone-btn {
+          padding: 6px 10px;
+          border-radius: 999px;
+          background: var(--zm-chip-bg);
+          color: var(--zm-chip-color);
+          border: 1px solid var(--divider-color);
+        }
+        button.zone-btn.active {
+          background: var(--zm-chip-active);
+          color: #fff;
+          border-color: var(--zm-chip-active);
+        }
+        .container.dark button.zone-btn {
+          background: #2a2c31;
+          color: #e5e9f0;
+          border-color: #3a3d45;
+        }
+        .container.dark button.zone-btn.active {
+          /* Match other buttons' dark color */
+          background: #2d7dd2;
+          color: #fff;
+          border-color: #2d7dd2;
+        }
         .info { margin-top: 12px; font-size: 14px; color: var(--secondary-text-color); }
         .container.dark .info { color: #b0b6c2; }
         .container.dark .zone-item { background: #2a2c31; color: #d8dee9; }
-        .entity-selection { margin: 8px 0 8px 0; padding: 12px; background: var(--secondary-background-color); border-radius: 4px; }
-        .entity-row { display: flex; flex-direction: column; align-items: stretch; gap: 6px; margin: 8px 0; }
-        .entity-row label { font-weight: bold; opacity: 0.9; }
-        .entity-row select { width: 100%; padding: 4px 8px; border: 1px solid var(--divider-color); border-radius: 4px; background: var(--card-background-color); color: var(--primary-text-color); font-size: 13px; }
+        .entity-selection { margin: 4px 0; padding: 0; background: transparent; border-radius: 0; }
+        /* Denser row layout */
+        .entity-row { display: grid; grid-template-columns: auto 1fr 1fr auto; gap: 6px; align-items: center; margin: 6px 0; }
+        .entity-row label { font-weight: 600; opacity: 0.95; }
+        .entity-row select { width: 100%; padding: 2px 6px; border: 1px solid var(--divider-color); border-radius: 6px; background: var(--card-background-color); color: var(--primary-text-color); font-size: 12px; height: 28px; }
         .container.dark .entity-row select { background: #202226; border-color: #3a3d45; color: #e5e9f0; }
         .device-title { font-size: 1.2em; font-weight: bold; margin-bottom: 8px; }
         .entity-controls { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
         .entity-controls select { width: 100%; }
         .pair-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
         .subtle { opacity: 0.85; font-size: 0.92em; }
-        .config { margin-top: 10px; }
-        .config-header { display: flex; align-items: center; justify-content: space-between; cursor: pointer; padding: 8px 12px; background: var(--secondary-background-color); border-radius: 4px; }
+        .config { margin-top: 0; }
+        .config-header { display: flex; align-items: center; justify-content: space-between; cursor: pointer; padding: 4px 0; background: transparent; border-radius: 0; }
         .config-title { font-weight: 600; }
-        .config-content { padding: 8px 0; display: none; }
-        .config-content.open { display: block; }
+        /* Smooth collapse/expand */
+        .config-content { max-height: 0; overflow: hidden; transition: max-height 200ms ease, padding 200ms ease; padding: 0; }
+        .config-content.open { max-height: 1200px; padding: 4px 0; }
+        .subsection-header { display: flex; align-items: center; justify-content: space-between; cursor: pointer; padding: 4px 0; background: transparent; border-radius: 0; margin-top: 4px; }
+        .subsection-title { font-weight: 600; }
+        @media (max-width: 520px) { .entity-row { grid-template-columns: 1fr; } }
       </style>
       <div class="container ${this.darkMode ? 'dark' : ''}">
         <div class="device-title">Location: ${this.location}</div>
@@ -234,31 +255,52 @@ class ZoneMapperCard extends HTMLElement {
         </div>
         <div class="config">
           <div id="btnConfigToggle" class="config-header">
-            <span class="config-title">Config</span>
+            <span class="config-title">Configure</span>
             <span>${this.showConfig ? '▾' : '▸'}</span>
           </div>
           <div id="configContent" class="config-content ${this.showConfig ? 'open' : ''}">
-            <div class="entity-selection">
-              <div class="entity-controls">
-                <label for="deviceSelect" class="subtle">Device</label>
-                <select id="deviceSelect"></select>
-                <span class="subtle">Select the HA device that owns your X/Y sensor entities.</span>
-              </div>
-              <div id="entityPairs"></div>
-              <div class="pair-actions">
-                <button id="btnAddPair" title="Add X/Y pair">Add X/Y Pair</button>
-                <button id="btnApplyEntities" title="Save entity pairs to backend">Apply</button>
-              </div>
-            </div>
             <div class="controls" id="cone-controls">
               <label for="coneAngleSlider">Cone rotation: </label>
               <input type="range" id="coneAngleSlider" min="-180" max="180" step="1" value="${this.coneAngleDeg}" />
               <span id="coneAngleLabel">${this.coneAngleDeg}°</span>
             </div>
+            <div class="subsection-header" id="toggleDeviceTargets">
+              <span class="subsection-title">Device and Targets</span>
+              <span id="caretDeviceTargets">${this.showDeviceTargets ? '▾' : '▸'}</span>
+            </div>
+            <div class="config-content ${this.showDeviceTargets ? 'open' : ''}" id="sectionDeviceTargets">
+              <div class="entity-selection">
+                <div class="entity-controls">
+                  <label for="deviceSelect" class="subtle">Device</label>
+                  <select id="deviceSelect"></select>
+                  <span class="subtle">Select the HA device that owns your X/Y sensor entities.</span>
+                </div>
+                <div id="entityPairs"></div>
+                <div class="pair-actions">
+                  <button id="btnAddPair" title="Add X/Y pair">Add X/Y Pair</button>
+                  <button id="btnApplyEntities" title="Save entity pairs to backend">Apply</button>
+                </div>
+              </div>
+            </div>
+            <div class="subsection-header" id="toggleZones">
+              <span class="subsection-title">Zones</span>
+              <span id="caretZones">${this.showZones ? '▾' : '▸'}</span>
+            </div>
+            <div class="config-content ${this.showZones ? 'open' : ''}" id="sectionZones">
+              <div class="entity-selection">
+                <div class="entity-controls">
+                  <div class="pair-actions">
+                    <button id="btnAddZone" title="Add new zone">Add Zone</button>
+                  </div>
+                  <div id="zoneManager"></div>
+                </div>
+              </div>
+            </div>
+            <div class="info">
+              Click & drag for Rectangle/Ellipse. Polygon: click points, double-click to finish (max ${this.polyMaxPoints} pts). Units mm (X: ${this.xMin}..${this.xMax}, Y: ${this.yMin}..${this.yMax})
+            </div>
           </div>
-        </div>
-        <div class="info">
-          Click & drag for Rect/Ellipse. Polygon: click points, double-click to finish (max ${this.polyMaxPoints} pts). Units mm (X: ${this.xMin}..${this.xMax}, Y: ${this.yMin}..${this.yMax})
+          
         </div>
       </div>
     `;
@@ -267,6 +309,7 @@ class ZoneMapperCard extends HTMLElement {
     this.setupCanvas();
     this.attachEventListeners();
     this._renderEntitySelection();
+    this._renderZoneManager();
     if (this._hass) {
       this.updateZonesFromEntities();
     }
@@ -306,6 +349,7 @@ class ZoneMapperCard extends HTMLElement {
 
     const clearBtn = document.createElement('button');
     clearBtn.id = 'clearBtn';
+    clearBtn.className = 'zone-btn clear-all';
     clearBtn.textContent = 'Clear All Zones';
     container.appendChild(clearBtn);
 
@@ -359,7 +403,7 @@ class ZoneMapperCard extends HTMLElement {
     this.canvas.addEventListener('touchmove', (e) => { e.preventDefault(); this.draw(e); }, { passive: false });
     this.canvas.addEventListener('touchend', (e) => { e.preventDefault(); this.endDrawing(e); }, { passive: false });
     // Finish polygon on double-click
-    this.canvas.addEventListener('dblclick', (e) => {
+    this.canvas.addEventListener('dblclick', () => {
       if (this.drawMode === 'polygon') {
         this.finishPolygon();
       }
@@ -498,6 +542,13 @@ class ZoneMapperCard extends HTMLElement {
     const btnApplyEntities = this.shadowRoot.getElementById('btnApplyEntities');
     const btnConfigToggle = this.shadowRoot.getElementById('btnConfigToggle');
     const configContent = this.shadowRoot.getElementById('configContent');
+    const btnAddZone = this.shadowRoot.getElementById('btnAddZone');
+    const toggleDeviceTargets = this.shadowRoot.getElementById('toggleDeviceTargets');
+    const caretDeviceTargets = this.shadowRoot.getElementById('caretDeviceTargets');
+    const sectionDeviceTargets = this.shadowRoot.getElementById('sectionDeviceTargets');
+    const toggleZones = this.shadowRoot.getElementById('toggleZones');
+    const caretZones = this.shadowRoot.getElementById('caretZones');
+    const sectionZones = this.shadowRoot.getElementById('sectionZones');
     if (btnConfigToggle && configContent) {
       btnConfigToggle.addEventListener('click', () => {
         this.showConfig = !this.showConfig;
@@ -539,6 +590,23 @@ class ZoneMapperCard extends HTMLElement {
         // Redraw points using latest selection
         this.drawGrid();
         this._notify('Entity pairs saved');
+      });
+    }
+    if (btnAddZone) {
+      btnAddZone.addEventListener('click', () => this._handleAddZone());
+    }
+    if (toggleDeviceTargets && sectionDeviceTargets && caretDeviceTargets) {
+      toggleDeviceTargets.addEventListener('click', () => {
+        this.showDeviceTargets = !this.showDeviceTargets;
+        sectionDeviceTargets.classList.toggle('open', this.showDeviceTargets);
+        caretDeviceTargets.textContent = this.showDeviceTargets ? '▾' : '▸';
+      });
+    }
+    if (toggleZones && sectionZones && caretZones) {
+      toggleZones.addEventListener('click', () => {
+        this.showZones = !this.showZones;
+        sectionZones.classList.toggle('open', this.showZones);
+        caretZones.textContent = this.showZones ? '▾' : '▸';
       });
     }
   }
@@ -686,31 +754,49 @@ class ZoneMapperCard extends HTMLElement {
     if (!this._hass) return;
     const sanitizedDevice = this.location.toLowerCase().replace(/\s+/g, '_');
     let restoredEntities = null;
-    this.zoneConfig.forEach(zoneConf => {
-      const entityId = `sensor.zone_mapper_${sanitizedDevice}_zone_${zoneConf.id}`;
+    // Discover zone sensors dynamically if none are configured
+    let zoneIds = new Set((this.zoneConfig || []).map(z => Number(z.id)));
+    if (!this.zoneConfig || this.zoneConfig.length === 0) {
+      Object.keys(this._hass.states || {}).forEach(eid => {
+        const m = eid.match(/^sensor\.zone_mapper_([a-z0-9_]+)_zone_(\d+)$/);
+        if (m && m[1] === sanitizedDevice) zoneIds.add(Number(m[2]));
+      });
+      // Initialize local config based on discovery (if still empty)
+      if (this.zoneConfig.length === 0 && zoneIds.size > 0) {
+        this.zoneConfig = Array.from(zoneIds).sort((a, b) => a - b).map(id => ({ id, name: `Zone ${id}` }));
+        this.renderZoneButtons();
+        this._renderZoneManager();
+      }
+    }
+    // Load each zone's attributes/state
+    Array.from(zoneIds).forEach(id => {
+      const entityId = `sensor.zone_mapper_${sanitizedDevice}_zone_${id}`;
       const state = this._hass.states[entityId];
-      if (state && state.attributes) {
-        if ('shape' in state.attributes) {
-          const shape = state.attributes.shape;
-          const data = state.attributes.data;
-            if (data) {
-              const z = { id: zoneConf.id, shape, ...data };
-              const existingZone = this.zones.find(zz => zz.id === zoneConf.id);
-              if (existingZone) Object.assign(existingZone, z); else this.zones.push(z);
-            }
+      if (!state || !state.attributes) return;
+      const attrs = state.attributes;
+      if ('shape' in attrs) {
+        const shape = attrs.shape;
+        const data = attrs.data;
+        if (data) {
+          const z = { id, shape, ...data };
+          const existingZone = this.zones.find(zz => zz.id === id);
+          if (existingZone) Object.assign(existingZone, z); else this.zones.push(z);
         }
-        // restore rotation if available
-        if (typeof state.attributes.rotation_deg === 'number') {
-          this.coneAngleDeg = Math.max(-180, Math.min(180, Math.round(state.attributes.rotation_deg)));
-          const angleSlider = this.shadowRoot.getElementById('coneAngleSlider');
-          const angleLabel = this.shadowRoot.getElementById('coneAngleLabel');
-          if (angleSlider) angleSlider.value = String(this.coneAngleDeg);
-          if (angleLabel) angleLabel.textContent = `${this.coneAngleDeg}°`;
-        }
-        // restore entity pairs if present
-        if (Array.isArray(state.attributes.entities) && state.attributes.entities.length) {
-          restoredEntities = state.attributes.entities;
-        }
+      }
+      // name propagation from backend (if present)
+      if (attrs.name) {
+        const zc = this.zoneConfig.find(z => Number(z.id) === Number(id));
+        if (zc) zc.name = attrs.name;
+      }
+      if (typeof attrs.rotation_deg === 'number') {
+        this.coneAngleDeg = Math.max(-180, Math.min(180, Math.round(attrs.rotation_deg)));
+        const angleSlider = this.shadowRoot.getElementById('coneAngleSlider');
+        const angleLabel = this.shadowRoot.getElementById('coneAngleLabel');
+        if (angleSlider) angleSlider.value = String(this.coneAngleDeg);
+        if (angleLabel) angleLabel.textContent = `${this.coneAngleDeg}°`;
+      }
+      if (Array.isArray(attrs.entities) && attrs.entities.length) {
+        restoredEntities = attrs.entities;
       }
     });
     if (restoredEntities && (!this.trackedEntities || this.trackedEntities.length === 0)) {
@@ -723,6 +809,87 @@ class ZoneMapperCard extends HTMLElement {
     }
     this.drawGrid();
     this.updateZoneList();
+  }
+
+  _renderZoneManager() {
+    const host = this.shadowRoot?.getElementById('zoneManager');
+    if (!host) return;
+    host.innerHTML = '';
+    const zones = (this.zoneConfig || []).slice().sort((a, b) => Number(a.id) - Number(b.id));
+    zones.forEach(z => {
+      const row = document.createElement('div');
+      row.className = 'entity-row';
+      const label = document.createElement('label');
+      label.textContent = `Zone ${z.id}`;
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.value = z.name || `Zone ${z.id}`;
+      input.placeholder = `Zone ${z.id}`;
+      const saveBtn = document.createElement('button');
+      saveBtn.textContent = 'Save';
+      const delBtn = document.createElement('button');
+      delBtn.textContent = 'Delete';
+
+      saveBtn.addEventListener('click', () => {
+        const newName = input.value?.trim() || `Zone ${z.id}`;
+        z.name = newName;
+        // Persist the friendly name to backend (no shape/data change)
+        if (this._hass) {
+          this._hass.callService('zone_mapper', 'update_zone', {
+            location: this.location,
+            zone_id: z.id,
+            name: newName,
+          });
+        }
+        this.renderZoneButtons();
+        this.drawGrid();
+      });
+
+      delBtn.addEventListener('click', () => {
+        // Delete the zone and remove its entities
+        if (this._hass) {
+          this._hass.callService('zone_mapper', 'update_zone', {
+            location: this.location,
+            zone_id: z.id,
+            delete: true,
+          });
+        }
+        // Remove from UI state
+        this.zoneConfig = (this.zoneConfig || []).filter(zz => String(zz.id) !== String(z.id));
+        this.zones = (this.zones || []).filter(zz => String(zz.id) !== String(z.id));
+        if (String(this.selectedZone) === String(z.id)) this.selectedZone = null;
+        this.renderZoneButtons();
+        this._renderZoneManager();
+        this.drawGrid();
+      });
+
+      row.appendChild(label);
+      row.appendChild(input);
+      row.appendChild(saveBtn);
+      row.appendChild(delBtn);
+      host.appendChild(row);
+    });
+  }
+
+  _handleAddZone() {
+    // Compute next available id
+    const ids = new Set([...(this.zoneConfig || []).map(z => Number(z.id)), ...(this.zones || []).map(z => Number(z.id))]);
+    let next = 1;
+    while (ids.has(next)) next += 1;
+    const newZone = { id: next, name: `Zone ${next}` };
+    this.zoneConfig = [...(this.zoneConfig || []), newZone];
+    // Persist empty zone with name so entities are created and named
+    if (this._hass) {
+      this._hass.callService('zone_mapper', 'update_zone', {
+        location: this.location,
+        zone_id: next,
+        shape: 'none',
+        data: null,
+        name: newZone.name,
+      });
+    }
+    this.renderZoneButtons();
+    this._renderZoneManager();
   }
 
   finishPolygon() {
@@ -1013,7 +1180,6 @@ class ZoneMapperCard extends HTMLElement {
     // Point on arc at angle ang on circle with radius
     const pAt = (ang) => ({ x: radius * Math.sin(ang), y: radius * Math.cos(ang) });
     const L = pAt(thetaStart);
-    const R = pAt(thetaEnd);
     const lx = this.valueToPixels(L.x, 'x');
     const ly = this.valueToPixels(L.y, 'y');
 
@@ -1159,9 +1325,9 @@ class ZoneMapperCard extends HTMLElement {
         if (info) this._selectedDeviceId = info.device_id;
       }
       this._renderEntitySelection();
-    } catch (e) {
+    } catch {
       // Silently ignore; dropdowns will remain empty
-      // console.warn('Failed to load registries', e);
+      // console.warn('Failed to load registries', _e);
     }
   }
 
@@ -1254,9 +1420,8 @@ class ZoneMapperCard extends HTMLElement {
   _suggestPairsFromDevice(forceReplace = false) {
     if (!this._selectedDeviceId) return false;
     const list = (this._allEntities || []).filter(e => e.device_id === this._selectedDeviceId && (e.entity_id || '').startsWith('sensor.'));
-    // Heuristic: group by suffix _x/_y or contains 'x'/'y'
-    const xs = list.filter(e => /(^|[_\-])x(\b|[_\-])/.test(e.entity_id) || /_x$/.test(e.entity_id));
-    const ys = list.filter(e => /(^|[_\-])y(\b|[_\-])/.test(e.entity_id) || /_y$/.test(e.entity_id));
+    const xs = list.filter(e => /(^|[_-])x(\b|[_-])/.test(e.entity_id) || /_x$/.test(e.entity_id));
+    const ys = list.filter(e => /(^|[_-])y(\b|[_-])/.test(e.entity_id) || /_y$/.test(e.entity_id));
     const pairs = [];
     const used = new Set();
     // Try to pair by replacing x->y in name
@@ -1298,9 +1463,7 @@ class ZoneMapperCard extends HTMLElement {
       const ev = new Event('hass-notification', { bubbles: true, composed: true });
       ev.detail = { message };
       this.dispatchEvent(ev);
-    } catch (e) {
-      // Fallback
-      // eslint-disable-next-line no-alert
+    } catch {
       alert(message);
     }
   }
