@@ -1,3 +1,80 @@
+const COLOR = Object.freeze({
+  ui: {
+    lightCanvasBackground: '#ffffff',
+    darkContainerBackground: '#1e1f23',
+    darkContainerText: '#eceff4',
+    darkCanvasBorder: '#3a3d45',
+    darkCanvasBackground: '#121316',
+    overlayButtonLightBg: 'rgba(0, 0, 0, 0.50)',
+    overlayButtonLightBorder: 'rgba(255, 255, 255, 0.25)',
+    overlayButtonDarkBg: 'rgba(255, 255, 255, 0.16)',
+    overlayButtonDarkBorder: 'rgba(255, 255, 255, 0.25)',
+    overlayButtonText: '#ffffff',
+    overlayButtonActiveOutline: '#4caf50',
+    darkPrimaryButton: '#2d7dd2',
+    darkZoneButtonBg: '#2a2c31',
+    darkZoneButtonText: '#e5e9f0',
+    darkZoneButtonBorder: '#3a3d45',
+    darkZoneButtonActiveBg: '#2d7dd2',
+    darkZoneButtonActiveBorder: '#2d7dd2',
+    infoDarkText: '#b0b6c2',
+    zoneItemDarkBg: '#2a2c31',
+    zoneItemDarkText: '#d8dee9',
+    darkSelectBg: '#202226',
+    darkSelectBorder: '#3a3d45',
+    darkSelectText: '#e5e9f0',
+    primaryButtonText: '#ffffff',
+  },
+  canvas: {
+    defaultTarget: '#ff6b6b',
+    targetStroke: '#ffffff',
+    gridLine: '#e0e0e0',
+    axisLight: '#000000',
+    axisDark: '#ffffff',
+    polygonPreviewLight: 'rgba(100,100,100,0.75)',
+    polygonPreviewDark: 'rgba(255,255,255,0.75)',
+    polygonVertexFillLight: '#000000',
+    polygonVertexFillDark: '#ffffff',
+    polygonVertexStrokeLight: 'rgba(255,255,255,0.6)',
+    polygonVertexStrokeDark: 'rgba(0,0,0,0.6)',
+    polygonStrokeLight: 'rgba(33,33,33,0.85)',
+    polygonStrokeDark: 'rgba(255,255,255,0.85)',
+    drawStrokeLight: 'rgba(100, 100, 100, 0.5)',
+    drawStrokeDark: 'rgba(255,255,255,0.75)',
+    deviceConeFill: 'rgba(128, 233, 31, 0.06)',
+    deviceConeStroke: 'rgba(117, 243, 33, 0.6)',
+    zonePalette: [
+      'rgba(244, 67, 54, 0.30)',
+      'rgba(33, 150, 243, 0.30)',
+      'rgba(76, 175, 80, 0.30)',
+      'rgba(255, 193, 7, 0.30)',
+      'rgba(156, 39, 176, 0.30)',
+    ],
+    targetPalette: ['#f44336', '#2196f3', '#4caf50', '#ffc107', '#9c27b0'],
+  },
+});
+
+const DRAW_MODES = Object.freeze({
+  RECT: 'rect',
+  ELLIPSE: 'ellipse',
+  POLYGON: 'polygon',
+});
+
+const DEFAULT_GRID = Object.freeze({
+  xMin: -5000,
+  xMax: 5000,
+  yMin: 0,
+  yMax: 10000,
+});
+
+const DEFAULT_CONE = Object.freeze({
+  yMax: 6000,
+  fovDeg: 120,
+  angleDeg: 0,
+});
+
+const POLYGON_MAX_POINTS = 32;
+
 class ZoneMapperCard extends HTMLElement {
   constructor() {
     super();
@@ -7,7 +84,7 @@ class ZoneMapperCard extends HTMLElement {
     this.isDrawing = false;
     this.startPoint = null;
     this._cursorPoint = null;
-    this.entitiesPopulated = false;
+    this._activeInput = null;
     this.trackedEntities = [];
     this._selectedDeviceId = null;
     this.showZones = false;
@@ -18,18 +95,18 @@ class ZoneMapperCard extends HTMLElement {
     this.zoneConfig = [];
     this.selectedZone = null;
     // Grid defaults (mm)
-    this.xMin = -5000;
-    this.xMax = 5000;
-    this.yMin = 0;
-    this.yMax = 10000;
+    this.xMin = DEFAULT_GRID.xMin;
+    this.xMax = DEFAULT_GRID.xMax;
+    this.yMin = DEFAULT_GRID.yMin;
+    this.yMax = DEFAULT_GRID.yMax;
     // Cone defaults
-    this.coneYMax = 6000;
-    this.coneFovDeg = 120;
-    this.coneAngleDeg = 0;
-    this.coneAngleDefault = 0;
+    this.coneYMax = DEFAULT_CONE.yMax;
+    this.coneFovDeg = DEFAULT_CONE.fovDeg;
+    this.coneAngleDeg = DEFAULT_CONE.angleDeg;
+    this.coneAngleDefault = DEFAULT_CONE.angleDeg;
     // Drawing/UI
-    this.polyMaxPoints = 32;
-    this.drawMode = 'rect';
+    this.polyMaxPoints = POLYGON_MAX_POINTS;
+    this.drawMode = DRAW_MODES.RECT;
     this.showModeMenu = false;
     this.isLocked = false;
   }
@@ -55,11 +132,6 @@ class ZoneMapperCard extends HTMLElement {
         fov_deg: 120,
         angle_deg: 0,
       },
-      // direct_entity: true,
-      // entities: [
-      //   { x1: 'sensor.some_device_target_1_x' },
-      //   { y1: 'sensor.some_device_target_1_y' },
-      // ],
     };
   }
 
@@ -73,9 +145,6 @@ class ZoneMapperCard extends HTMLElement {
     // Resolve location name used for UI, entity restoration, and backend
     this.location = String(config.location);
 
-    // Direct entity mode (optional). Otherwise, use dropdowns in the UI.
-    this.directEntity = !!config.direct_entity;
-
     this.zoneConfig = Array.isArray(config.zones) ? [...config.zones] : [];
     this.trackedEntities = this.buildTrackedEntities(config);
 
@@ -83,32 +152,8 @@ class ZoneMapperCard extends HTMLElement {
       this.darkMode = !!config.dark_mode;
     }
 
-    if (config.grid && typeof config.grid === 'object') {
-      const g = config.grid;
-      if (g.x_min !== undefined) this.xMin = g.x_min;
-      if (g.x_max !== undefined) this.xMax = g.x_max;
-      if (g.y_min !== undefined) this.yMin = g.y_min;
-      if (g.y_max !== undefined) this.yMax = g.y_max;
-    }
-
-    if (config.cone && typeof config.cone === 'object') {
-      const c = config.cone;
-      if (c.y_max !== undefined) this.coneYMax = c.y_max;
-      if (c.fov_deg !== undefined) {
-        const f = Number(c.fov_deg);
-        this.coneFovDeg = Number.isFinite(f) ? Math.max(1, Math.min(360, f)) : 120;
-      }      
-      if (c.angle_deg !== undefined) {
-        this.coneAngleDefault = Number(c.angle_deg) || 0;
-        this.coneAngleDeg = this.coneAngleDefault;
-      }
-    }
-
-    // ensure mins <= maxs
-    if (this.xMin > this.xMax) [this.xMin, this.xMax] = [this.xMax, this.xMin];
-    if (this.yMin > this.yMax) [this.yMin, this.yMax] = [this.yMax, this.yMin];
-    if (this.coneAngleDeg < -180) this.coneAngleDeg = -180;
-    if (this.coneAngleDeg > 180) this.coneAngleDeg = 180;
+    this._applyGridConfig(config.grid);
+    this._applyConeConfig(config.cone);
     
     this.render();
   }
@@ -155,8 +200,8 @@ class ZoneMapperCard extends HTMLElement {
     return [];
   }
 
-  render() {
-    this.shadowRoot.innerHTML = `
+  _template() {
+    return `
       <style>
         :host { display: block; padding: 16px; }
         /* Theme tokens */
@@ -168,22 +213,22 @@ class ZoneMapperCard extends HTMLElement {
           --zm-chip-color: var(--primary-text-color);
         }
         .container { background: var(--card-background-color); border-radius: var(--ha-card-border-radius, 12px); box-shadow: var(--ha-card-box-shadow); padding: 16px; }
-        .container.dark { background: #1e1f23; color: #eceff4; }
-        .container.dark .canvas-container { border-color: #3a3d45; background: #121316; }
-        .canvas-container { position: relative; width: 100%; aspect-ratio: 1; border: 1px solid var(--divider-color); border-radius: var(--zm-radius); overflow: hidden; background: #ffffff; isolation: isolate; }
+        .container.dark { background: ${COLOR.ui.darkContainerBackground}; color: ${COLOR.ui.darkContainerText}; }
+        .container.dark .canvas-container { border-color: ${COLOR.ui.darkCanvasBorder}; background: ${COLOR.ui.darkCanvasBackground}; }
+        .canvas-container { position: relative; width: 100%; aspect-ratio: 1; border: 1px solid var(--divider-color); border-radius: var(--zm-radius); overflow: hidden; background: ${COLOR.ui.lightCanvasBackground}; isolation: isolate; }
         canvas { width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
         .overlay-controls { position: absolute; bottom: 4px; display: flex; gap: 4px; z-index: 1; }
         .overlay-controls-left { left: 4px; flex-direction: column; align-items: flex-start; }
         .overlay-controls-right { right: 4px; }
-        .overlay-controls button { width: 30px; height: 30px; padding: 0; background: rgba(0,0,0,0.50); color: #fff; border: 1px solid rgba(255,255,255,0.25); border-radius: 8px; font-size: 11px; line-height: 1; cursor: pointer; backdrop-filter: blur(4px); }
-        .container.dark .overlay-controls button { background: rgba(255,255,255,0.16); color: #fff; border-color: rgba(255,255,255,0.25); }
-        .overlay-controls button.active { outline: 2px solid #4caf50; }
+        .overlay-controls button { width: 30px; height: 30px; padding: 0; background: ${COLOR.ui.overlayButtonLightBg}; color: ${COLOR.ui.overlayButtonText}; border: 1px solid ${COLOR.ui.overlayButtonLightBorder}; border-radius: 8px; font-size: 11px; line-height: 1; cursor: pointer; backdrop-filter: blur(4px); }
+        .container.dark .overlay-controls button { background: ${COLOR.ui.overlayButtonDarkBg}; color: ${COLOR.ui.overlayButtonText}; border-color: ${COLOR.ui.overlayButtonDarkBorder}; }
+        .overlay-controls button.active { outline: 2px solid ${COLOR.ui.overlayButtonActiveOutline}; }
         .overlay-controls button:disabled { opacity: 0.4; cursor: default; }
         .controls { margin: 12px 0; display: flex; gap: var(--zm-gap); flex-wrap: wrap; }
         #cone-controls { align-items: center; padding-top: 8px; }
         #coneAngleSlider { flex: 1; min-width: 160px; }
-        button { padding: 8px 16px; background: var(--primary-color); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; }
-        .container.dark button { background: #2d7dd2; }
+        button { padding: 8px 16px; background: var(--primary-color); color: ${COLOR.ui.primaryButtonText}; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; }
+        .container.dark button { background: ${COLOR.ui.darkPrimaryButton}; }
         button:hover { opacity: 0.9; }
         /* Chip-like zone buttons */
         button.zone-btn {
@@ -195,29 +240,29 @@ class ZoneMapperCard extends HTMLElement {
         }
         button.zone-btn.active {
           background: var(--zm-chip-active);
-          color: #fff;
+          color: ${COLOR.ui.overlayButtonText};
           border-color: var(--zm-chip-active);
         }
         .container.dark button.zone-btn {
-          background: #2a2c31;
-          color: #e5e9f0;
-          border-color: #3a3d45;
+          background: ${COLOR.ui.darkZoneButtonBg};
+          color: ${COLOR.ui.darkZoneButtonText};
+          border-color: ${COLOR.ui.darkZoneButtonBorder};
         }
         .container.dark button.zone-btn.active {
           /* Match other buttons' dark color */
-          background: #2d7dd2;
-          color: #fff;
-          border-color: #2d7dd2;
+          background: ${COLOR.ui.darkZoneButtonActiveBg};
+          color: ${COLOR.ui.overlayButtonText};
+          border-color: ${COLOR.ui.darkZoneButtonActiveBorder};
         }
         .info { margin-top: 12px; font-size: 14px; color: var(--secondary-text-color); }
-        .container.dark .info { color: #b0b6c2; }
-        .container.dark .zone-item { background: #2a2c31; color: #d8dee9; }
+        .container.dark .info { color: ${COLOR.ui.infoDarkText}; }
+        .container.dark .zone-item { background: ${COLOR.ui.zoneItemDarkBg}; color: ${COLOR.ui.zoneItemDarkText}; }
         .entity-selection { margin: 4px 0; padding: 0; background: transparent; border-radius: 0; }
         /* Denser row layout */
         .entity-row { display: grid; grid-template-columns: auto 1fr 1fr auto; gap: 6px; align-items: center; margin: 6px 0; }
         .entity-row label { font-weight: 600; opacity: 0.95; }
         .entity-row select { width: 100%; padding: 2px 6px; border: 1px solid var(--divider-color); border-radius: 6px; background: var(--card-background-color); color: var(--primary-text-color); font-size: 12px; height: 28px; }
-        .container.dark .entity-row select { background: #202226; border-color: #3a3d45; color: #e5e9f0; }
+        .container.dark .entity-row select { background: ${COLOR.ui.darkSelectBg}; border-color: ${COLOR.ui.darkSelectBorder}; color: ${COLOR.ui.darkSelectText}; }
         .device-title { font-size: 1.2em; font-weight: bold; margin-bottom: 8px; }
         .entity-controls { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
         .entity-controls select { width: 100%; }
@@ -304,6 +349,11 @@ class ZoneMapperCard extends HTMLElement {
         </div>
       </div>
     `;
+  }
+
+  render() {
+    this._detachGlobalListeners();
+    this.shadowRoot.innerHTML = this._template();
 
     this.renderZoneButtons();
     this.setupCanvas();
@@ -317,32 +367,20 @@ class ZoneMapperCard extends HTMLElement {
 
   renderZoneButtons() {
     const container = this.shadowRoot.getElementById('zone-buttons');
+    if (!container) return;
     container.innerHTML = '';
+    if (!this.zoneConfig || this.zoneConfig.length === 0) {
+      this.selectedZone = null;
+    }
     this.zoneConfig.forEach(zone => {
       const btn = document.createElement('button');
       btn.className = 'zone-btn';
       btn.dataset.zoneId = zone.id;
-      btn.textContent = zone.name;
-      btn.addEventListener('click', () => {
-        this.shadowRoot.querySelectorAll('.zone-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        this.selectedZone = zone.id;
-      });
+      btn.textContent = this._zoneLabel(zone.id);
+      btn.addEventListener('click', () => this._setSelectedZone(zone.id));
       btn.addEventListener('dblclick', (e) => {
         e.preventDefault();
-        const zoneId = zone.id;
-        // Represent cleared zone by sending shape with null data
-        const idx = this.zones.findIndex(z => String(z.id) === String(zoneId));
-        if (idx !== -1) this.zones.splice(idx, 1);
-        this.updateHomeAssistantShape(zoneId, 'none', null);
-        this.drawGrid();
-        this.updateZoneList();
-        // Clear any in-progress drawing state
-        this.isDrawing = false;
-        this._polyPoints = [];
-        this._cursorPoint = null;
-        this.startPoint = null;
-        this.drawGrid();
+        this._clearZone(zone.id, true);
       });
       container.appendChild(btn);
     });
@@ -353,12 +391,21 @@ class ZoneMapperCard extends HTMLElement {
     clearBtn.textContent = 'Clear All Zones';
     container.appendChild(clearBtn);
 
-    if (container.querySelector('.zone-btn')) {
-      container.querySelector('.zone-btn').click();
+    const firstZone = container.querySelector('.zone-btn[data-zone-id]');
+    if (this.selectedZone !== null && this.selectedZone !== undefined) {
+      const existingSelection = container.querySelector(`.zone-btn[data-zone-id="${this.selectedZone}"]`);
+      if (existingSelection) {
+        this._setSelectedZone(this.selectedZone);
+        return;
+      }
+    }
+    if (firstZone) {
+      this._setSelectedZone(Number(firstZone.dataset.zoneId));
     }
   }
 
-  drawCurrentPosition(x, y, color = '#ff6b6b') {
+  drawCurrentPosition(x, y, color = COLOR.canvas.defaultTarget) {
+    if (!this.ctx || !this.canvas) return;
     const ctx = this.ctx;
     const pixelX = this.valueToPixels(x, 'x');
     const pixelY = this.valueToPixels(y, 'y');
@@ -368,97 +415,137 @@ class ZoneMapperCard extends HTMLElement {
       ctx.beginPath();
       ctx.arc(pixelX, pixelY, 6, 0, 2 * Math.PI);
       ctx.fill();
-      ctx.strokeStyle = '#ffffff';
+      ctx.strokeStyle = COLOR.canvas.targetStroke;
       ctx.lineWidth = 2;
       ctx.stroke();
     }
   }
 
   attachEventListeners() {
-    const zoneButtons = this.shadowRoot.getElementById('zone-buttons');
-    zoneButtons.addEventListener('click', (e) => {
-      const t = e.target;
-      if (!t) return;
-      if (t.id === 'clearBtn') {
-        this.zones = [];
-        this.drawGrid();
-        this.updateZoneList();
-        this.zoneConfig.forEach(zone => {
-          this.updateHomeAssistantShape(zone.id, 'none', null);
-        });
-        // Clear any in-progress drawing state
-        this.isDrawing = false;
-        this._polyPoints = [];
-        this._cursorPoint = null;
-        this.startPoint = null;
-        this.drawGrid();
-      }
-    });
+    this._attachZoneListEvents();
+    this._attachCanvasEvents();
+    this._attachConeControls();
+    this._attachDrawingModeControls();
+    this._attachConfigEvents();
+  }
 
-    // Mouse/touch events
-    this.canvas.addEventListener('mousedown', (e) => this.startDrawing(e));
-    this.canvas.addEventListener('mousemove', (e) => this.draw(e));
-    this.canvas.addEventListener('mouseup', (e) => this.endDrawing(e));
-    this.canvas.addEventListener('touchstart', (e) => { e.preventDefault(); this.startDrawing(e); }, { passive: false });
-    this.canvas.addEventListener('touchmove', (e) => { e.preventDefault(); this.draw(e); }, { passive: false });
-    this.canvas.addEventListener('touchend', (e) => { e.preventDefault(); this.endDrawing(e); }, { passive: false });
-    // Finish polygon on double-click
+  _attachZoneListEvents() {
+    const zoneButtons = this.shadowRoot.getElementById('zone-buttons');
+    if (!zoneButtons) return;
+    zoneButtons.addEventListener('click', (event) => {
+      const target = event.target;
+      if (!target || target.id !== 'clearBtn') {
+        return;
+      }
+      this._clearAllZones();
+    });
+  }
+
+  _attachCanvasEvents() {
+    if (!this.canvas) return;
+
+    const handleMouseDown = (event) => this.startDrawing(event);
+    const handleMouseMove = (event) => this.draw(event);
+    const handleMouseUp = (event) => this.endDrawing(event);
+
+    this.canvas.addEventListener('mousedown', handleMouseDown);
+    this.canvas.addEventListener('mousemove', handleMouseMove);
+    this.canvas.addEventListener('mouseup', handleMouseUp);
+
+    this.canvas.addEventListener(
+      'touchstart',
+      (event) => {
+        event.preventDefault();
+        this.startDrawing(event);
+      },
+      { passive: false }
+    );
+    this.canvas.addEventListener(
+      'touchmove',
+      (event) => {
+        event.preventDefault();
+        this.draw(event);
+      },
+      { passive: false }
+    );
+    this.canvas.addEventListener(
+      'touchend',
+      (event) => {
+        event.preventDefault();
+        this.endDrawing(event);
+      },
+      { passive: false }
+    );
+
     this.canvas.addEventListener('dblclick', () => {
-      if (this.drawMode === 'polygon') {
+      if (this.drawMode === DRAW_MODES.POLYGON) {
         this.finishPolygon();
       }
     });
-    // Keyboard shortcuts for polygon
-    this._onKeyDown = (ev) => {
-      if (this.drawMode !== 'polygon') return;
-      if (ev.key === 'Escape') {
+
+    this._onKeyDown = (event) => {
+      if (this.drawMode !== DRAW_MODES.POLYGON) return;
+      if (event.key === 'Escape') {
         this._polyPoints = [];
         this.isDrawing = false;
         this.drawGrid();
-      } else if (ev.key === 'Backspace') {
-        if (this._polyPoints.length > 0) {
-          this._polyPoints.pop();
-          this.drawGrid();
-        }
+      } else if (event.key === 'Backspace' && this._polyPoints.length > 0) {
+        this._polyPoints.pop();
+        this.drawGrid();
       }
     };
     window.addEventListener('keydown', this._onKeyDown);
 
-    // Cone rotation slider
-    const angleSlider = this.shadowRoot.getElementById('coneAngleSlider');
-    const angleLabel = this.shadowRoot.getElementById('coneAngleLabel');
-    if (angleSlider && angleLabel) {
-      angleSlider.addEventListener('input', () => {
-        const val = parseInt(angleSlider.value, 10);
-        if (!Number.isNaN(val)) {
-          this.coneAngleDeg = Math.max(-180, Math.min(180, val));
-          angleLabel.textContent = `${this.coneAngleDeg}°`;
-          this.drawGrid();
-        }
-      });
-      // Send rotation to backend when user finishes sliding
-      angleSlider.addEventListener('change', () => {
-        if (!this._hass) return;
-        this._hass.callService('zone_mapper', 'update_zone', {
-          location: this.location,
-          rotation_deg: this.coneAngleDeg,
-        });
-      });
-      angleSlider.addEventListener('dblclick', () => {
-        this.coneAngleDeg = this.coneAngleDefault;
-        angleSlider.value = String(this.coneAngleDeg);
-        angleLabel.textContent = `${this.coneAngleDeg}°`;
-        this.drawGrid();
-        if (this._hass) {
-          this._hass.callService('zone_mapper', 'update_zone', {
-            location: this.location,
-            rotation_deg: this.coneAngleDeg,
-          });
-        }
+    const canvasContainer = this.canvas.parentElement;
+    this._outsideClickHandler = (event) => {
+      if (!this.canvas) return;
+      if (canvasContainer && canvasContainer.contains(event.target)) return;
+      if (!this.shadowRoot.contains(event.target)) return;
+      if (this.isDrawing) this.cancelDrawing();
+    };
+    document.addEventListener('mousedown', this._outsideClickHandler, true);
+    document.addEventListener('touchstart', this._outsideClickHandler, true);
+
+    if (canvasContainer) {
+      canvasContainer.addEventListener('mouseleave', () => {
+        if (this.isDrawing) this.cancelDrawing();
       });
     }
+  }
 
-    // Mode menu and buttons
+  _attachConeControls() {
+    const angleSlider = this.shadowRoot.getElementById('coneAngleSlider');
+    const angleLabel = this.shadowRoot.getElementById('coneAngleLabel');
+    if (!angleSlider || !angleLabel) return;
+
+    const updateDisplay = () => {
+      angleLabel.textContent = `${this.coneAngleDeg}°`;
+      angleSlider.value = String(this.coneAngleDeg);
+    };
+
+    angleSlider.addEventListener('input', () => {
+      const value = parseInt(angleSlider.value, 10);
+      if (Number.isNaN(value)) return;
+      this.coneAngleDeg = this._clampConeAngle(value);
+      updateDisplay();
+      this.drawGrid();
+    });
+
+    angleSlider.addEventListener('change', () => {
+      this._persistRotation();
+    });
+
+    angleSlider.addEventListener('dblclick', () => {
+      this.coneAngleDeg = this.coneAngleDefault;
+      updateDisplay();
+      this.drawGrid();
+      this._persistRotation();
+    });
+
+    updateDisplay();
+  }
+
+  _attachDrawingModeControls() {
     const btnModeMenu = this.shadowRoot.getElementById('btnModeMenu');
     const modeGroup = this.shadowRoot.getElementById('modeGroup');
     const btnModeRect = this.shadowRoot.getElementById('btnModeRect');
@@ -474,140 +561,298 @@ class ZoneMapperCard extends HTMLElement {
         modeGroup.style.display = this.showModeMenu ? 'flex' : 'none';
       });
     }
-    const overlayButtons = [btnModeRect, btnModeEllipse, btnModePolygon];
-    const setMode = (m) => {
-      this.drawMode = m;
-      this.isDrawing = false; // cancel any existing drawing
-      if (m !== 'polygon') this._polyPoints = [];
-      this._cursorPoint = null;
-      this.startPoint = null;
-      overlayButtons.forEach(b => b && b.classList.remove('active'));
-      if (m === 'rect' && btnModeRect) btnModeRect.classList.add('active');
-      if (m === 'ellipse' && btnModeEllipse) btnModeEllipse.classList.add('active');
-      if (m === 'polygon' && btnModePolygon) btnModePolygon.classList.add('active');
-      this._updatePolygonButtonsVisibility();
-      this.drawGrid();
-    };
-    if (btnModeRect) btnModeRect.addEventListener('click', () => setMode('rect'));
-    if (btnModeEllipse) btnModeEllipse.addEventListener('click', () => setMode('ellipse'));
-    if (btnModePolygon) btnModePolygon.addEventListener('click', () => setMode('polygon'));
-    if (btnPolyUndo) btnPolyUndo.addEventListener('click', () => {
-      if (this.drawMode === 'polygon' && this._polyPoints.length) {
-        this._polyPoints.pop();
-        this.drawGrid();
-      }
-    });
-    if (btnPolyFinish) btnPolyFinish.addEventListener('click', () => {
-      if (this.drawMode === 'polygon') this.finishPolygon();
-    });
+
+    if (btnModeRect) btnModeRect.addEventListener('click', () => this._setDrawMode(DRAW_MODES.RECT));
+    if (btnModeEllipse) btnModeEllipse.addEventListener('click', () => this._setDrawMode(DRAW_MODES.ELLIPSE));
+    if (btnModePolygon) btnModePolygon.addEventListener('click', () => this._setDrawMode(DRAW_MODES.POLYGON));
+
+    if (btnPolyUndo) {
+      btnPolyUndo.addEventListener('click', () => {
+        if (this.drawMode === DRAW_MODES.POLYGON && this._polyPoints.length) {
+          this._polyPoints.pop();
+          this.drawGrid();
+        }
+      });
+    }
+
+    if (btnPolyFinish) {
+      btnPolyFinish.addEventListener('click', () => {
+        if (this.drawMode === DRAW_MODES.POLYGON) this.finishPolygon();
+      });
+    }
 
     if (btnLock) {
       const updateLockVisual = () => {
         btnLock.textContent = this.isLocked ? '🔒' : '🔓';
         btnLock.title = this.isLocked ? 'Unlock drawing' : 'Lock drawing';
-        this.canvas.style.cursor = this.isLocked ? 'not-allowed' : 'crosshair';
+        if (this.canvas) {
+          this.canvas.style.cursor = this.isLocked ? 'not-allowed' : 'crosshair';
+        }
       };
       btnLock.addEventListener('click', () => {
         this.isLocked = !this.isLocked;
         updateLockVisual();
-        // Cancel any in-progress drawing when locking
         if (this.isLocked && this.isDrawing) this.cancelDrawing();
       });
       updateLockVisual();
     }
-    // Initialize active mode
-    setMode(this.drawMode || 'rect');
 
-    // Cancel drawing if user clicks/touches outside canvas container
-    const canvasContainer = this.canvas.parentElement;
-    this._outsideClickHandler = (ev) => {
-      if (!this.canvas) return;
-      // Ignore clicks inside the canvas container (canvas + overlay controls)
-      if (canvasContainer && canvasContainer.contains(ev.target)) return;
-      if (!this.shadowRoot.contains(ev.target)) return; // outside entire card => ignore (HA might manage)
-      if (this.isDrawing) this.cancelDrawing();
-    };
-    document.addEventListener('mousedown', this._outsideClickHandler, true);
-    document.addEventListener('touchstart', this._outsideClickHandler, true);
-    // Cancel if pointer leaves canvas bounds
-    if (canvasContainer) {
-      canvasContainer.addEventListener('mouseleave', () => {
-        if (this.isDrawing) this.cancelDrawing();
-      });
-    }
+    this._setDrawMode(this.drawMode || DRAW_MODES.RECT);
+  }
 
-    // Entity selection events
-    const deviceSelect = this.shadowRoot.getElementById('deviceSelect');
-    const btnAddPair = this.shadowRoot.getElementById('btnAddPair');
-    const btnApplyEntities = this.shadowRoot.getElementById('btnApplyEntities');
+  _attachConfigEvents() {
     const btnConfigToggle = this.shadowRoot.getElementById('btnConfigToggle');
     const configContent = this.shadowRoot.getElementById('configContent');
-    const btnAddZone = this.shadowRoot.getElementById('btnAddZone');
-    const toggleDeviceTargets = this.shadowRoot.getElementById('toggleDeviceTargets');
-    const caretDeviceTargets = this.shadowRoot.getElementById('caretDeviceTargets');
-    const sectionDeviceTargets = this.shadowRoot.getElementById('sectionDeviceTargets');
-    const toggleZones = this.shadowRoot.getElementById('toggleZones');
-    const caretZones = this.shadowRoot.getElementById('caretZones');
-    const sectionZones = this.shadowRoot.getElementById('sectionZones');
     if (btnConfigToggle && configContent) {
       btnConfigToggle.addEventListener('click', () => {
         this.showConfig = !this.showConfig;
         configContent.classList.toggle('open', this.showConfig);
-        // update caret
-        btnConfigToggle.querySelector('span:last-child').textContent = this.showConfig ? '▾' : '▸';
+        const caret = btnConfigToggle.querySelector('span:last-child');
+        if (caret) caret.textContent = this.showConfig ? '▾' : '▸';
       });
     }
+
+    const deviceSelect = this.shadowRoot.getElementById('deviceSelect');
     if (deviceSelect) {
       deviceSelect.addEventListener('change', () => {
         this._selectedDeviceId = deviceSelect.value || null;
-        // If no device selected, clear any existing target rows
         if (!this._selectedDeviceId) {
           this.trackedEntities = [];
           this._renderEntitySelection();
           this.drawGrid();
           return;
         }
-        // When device changes, auto-suggest pairs for the new device, replacing existing pairs.
         this._suggestPairsFromDevice(true);
         this._renderEntitySelection();
       });
     }
+
+    const btnAddPair = this.shadowRoot.getElementById('btnAddPair');
     if (btnAddPair) {
       btnAddPair.addEventListener('click', () => {
         this.trackedEntities = [...(this.trackedEntities || []), { x: '', y: '' }];
         this._renderEntitySelection();
       });
     }
+
+    const btnApplyEntities = this.shadowRoot.getElementById('btnApplyEntities');
     if (btnApplyEntities) {
       btnApplyEntities.addEventListener('click', () => {
-        // Persist entity pairs to backend without changing zones
         if (!this._hass) return;
-        const pairs = (this.trackedEntities || []).filter(p => p.x && p.y);
+        const pairs = (this.trackedEntities || []).filter((pair) => pair.x && pair.y);
         this._hass.callService('zone_mapper', 'update_zone', {
           location: this.location,
-          entities: pairs
+          entities: pairs,
         });
-        // Redraw points using latest selection
         this.drawGrid();
         this._notify('Entity pairs saved');
       });
     }
+
+    const btnAddZone = this.shadowRoot.getElementById('btnAddZone');
     if (btnAddZone) {
       btnAddZone.addEventListener('click', () => this._handleAddZone());
     }
-    if (toggleDeviceTargets && sectionDeviceTargets && caretDeviceTargets) {
+
+    const toggleDeviceTargets = this.shadowRoot.getElementById('toggleDeviceTargets');
+    const caretDeviceTargets = this.shadowRoot.getElementById('caretDeviceTargets');
+    const sectionDeviceTargets = this.shadowRoot.getElementById('sectionDeviceTargets');
+    if (toggleDeviceTargets && caretDeviceTargets && sectionDeviceTargets) {
       toggleDeviceTargets.addEventListener('click', () => {
         this.showDeviceTargets = !this.showDeviceTargets;
         sectionDeviceTargets.classList.toggle('open', this.showDeviceTargets);
         caretDeviceTargets.textContent = this.showDeviceTargets ? '▾' : '▸';
       });
     }
-    if (toggleZones && sectionZones && caretZones) {
+
+    const toggleZones = this.shadowRoot.getElementById('toggleZones');
+    const caretZones = this.shadowRoot.getElementById('caretZones');
+    const sectionZones = this.shadowRoot.getElementById('sectionZones');
+    if (toggleZones && caretZones && sectionZones) {
       toggleZones.addEventListener('click', () => {
         this.showZones = !this.showZones;
         sectionZones.classList.toggle('open', this.showZones);
         caretZones.textContent = this.showZones ? '▾' : '▸';
       });
+    }
+  }
+
+  _applyGridConfig(grid) {
+    if (!grid || typeof grid !== 'object') return;
+    const toNumber = (value) => {
+      const num = Number(value);
+      return Number.isFinite(num) ? num : null;
+    };
+
+    const next = {
+      xMin: toNumber(grid.x_min),
+      xMax: toNumber(grid.x_max),
+      yMin: toNumber(grid.y_min),
+      yMax: toNumber(grid.y_max),
+    };
+
+    if (next.xMin !== null) this.xMin = next.xMin;
+    if (next.xMax !== null) this.xMax = next.xMax;
+    if (next.yMin !== null) this.yMin = next.yMin;
+    if (next.yMax !== null) this.yMax = next.yMax;
+
+    if (this.xMin > this.xMax) {
+      [this.xMin, this.xMax] = [this.xMax, this.xMin];
+    }
+    if (this.yMin > this.yMax) {
+      [this.yMin, this.yMax] = [this.yMax, this.yMin];
+    }
+    if (this.xMin === this.xMax) {
+      this.xMax = this.xMin + 1;
+    }
+    if (this.yMin === this.yMax) {
+      this.yMax = this.yMin + 1;
+    }
+  }
+
+  _applyConeConfig(cone) {
+    if (!cone || typeof cone !== 'object') return;
+    if (cone.y_max !== undefined && Number.isFinite(Number(cone.y_max))) {
+      this.coneYMax = Math.max(0, Number(cone.y_max));
+    }
+    if (cone.fov_deg !== undefined) {
+      const fov = Number(cone.fov_deg);
+      this.coneFovDeg = Number.isFinite(fov) ? Math.min(360, Math.max(1, fov)) : this.coneFovDeg;
+    }
+    if (cone.angle_deg !== undefined) {
+      const angle = this._clampConeAngle(Number(cone.angle_deg));
+      this.coneAngleDefault = angle;
+      this.coneAngleDeg = angle;
+    }
+  }
+
+  _clampConeAngle(angle) {
+    if (Number.isNaN(angle)) return 0;
+    return Math.max(-180, Math.min(180, angle));
+  }
+
+  _persistRotation() {
+    if (!this._hass) return;
+    this._hass.callService('zone_mapper', 'update_zone', {
+      location: this.location,
+      rotation_deg: this.coneAngleDeg,
+    });
+  }
+
+  _setDrawMode(mode) {
+    const nextMode = mode || DRAW_MODES.RECT;
+    if (this.drawMode === nextMode && !this.isDrawing) {
+      this._highlightActiveModeButton();
+      this._updatePolygonButtonsVisibility();
+      return;
+    }
+    this.drawMode = nextMode;
+    if (this.drawMode !== DRAW_MODES.POLYGON) {
+      this._polyPoints = [];
+    }
+    this._cursorPoint = null;
+    this.startPoint = null;
+    this.isDrawing = false;
+    this._highlightActiveModeButton();
+    this._updatePolygonButtonsVisibility();
+    this.drawGrid();
+  }
+
+  _highlightActiveModeButton() {
+    const rectBtn = this.shadowRoot?.getElementById('btnModeRect');
+    const ellipseBtn = this.shadowRoot?.getElementById('btnModeEllipse');
+    const polyBtn = this.shadowRoot?.getElementById('btnModePolygon');
+    [rectBtn, ellipseBtn, polyBtn].forEach((btn) => {
+      if (!btn) return;
+      const shouldActivate =
+        (btn === rectBtn && this.drawMode === DRAW_MODES.RECT) ||
+        (btn === ellipseBtn && this.drawMode === DRAW_MODES.ELLIPSE) ||
+        (btn === polyBtn && this.drawMode === DRAW_MODES.POLYGON);
+      btn.classList.toggle('active', shouldActivate);
+    });
+  }
+
+  _setSelectedZone(zoneId) {
+    if (zoneId === null || zoneId === undefined) {
+      this.selectedZone = null;
+      return;
+    }
+    this.selectedZone = Number(zoneId);
+    const buttons = this.shadowRoot?.querySelectorAll('.zone-btn[data-zone-id]');
+    if (!buttons) return;
+    buttons.forEach((btn) => {
+      const targetId = Number(btn.dataset.zoneId);
+      btn.classList.toggle('active', targetId === this.selectedZone);
+    });
+  }
+
+  _resetDrawingState() {
+    this.isDrawing = false;
+    this._polyPoints = [];
+    this._cursorPoint = null;
+    this.startPoint = null;
+    this._lastPolyTap = 0;
+    this._activeInput = null;
+  }
+
+  _getZone(zoneId) {
+    return this.zones.find((zone) => Number(zone.id) === Number(zoneId)) || null;
+  }
+
+  _zoneLabel(zoneId) {
+    if (zoneId === null || zoneId === undefined) {
+      return 'Zone';
+    }
+    const numericId = Number(zoneId);
+    const configZone = (this.zoneConfig || []).find((zone) => Number(zone.id) === Number(numericId));
+    const name = typeof configZone?.name === 'string' ? configZone.name.trim() : '';
+    if (name) {
+      return name;
+    }
+    if (!Number.isNaN(numericId)) {
+      return `Zone ${numericId}`;
+    }
+    return `Zone ${zoneId}`;
+  }
+
+  _upsertZone(zoneId, shape, data) {
+    const index = this.zones.findIndex((zone) => Number(zone.id) === Number(zoneId));
+    const entry = { id: Number(zoneId), shape, data };
+    if (index === -1) {
+      this.zones.push(entry);
+    } else {
+      this.zones[index] = entry;
+    }
+  }
+
+  _removeZone(zoneId) {
+    const index = this.zones.findIndex((zone) => Number(zone.id) === Number(zoneId));
+    if (index !== -1) {
+      this.zones.splice(index, 1);
+    }
+  }
+
+  _clearZone(zoneId, notifyBackend = false) {
+    this._removeZone(zoneId);
+    if (notifyBackend) {
+      this.updateHomeAssistantShape(zoneId, 'none', null);
+      const label = this._zoneLabel(zoneId);
+      this._notify(`${label} cleared`);
+    }
+    if (Number(this.selectedZone) === Number(zoneId)) {
+      this._resetDrawingState();
+    }
+    this.drawGrid();
+  }
+
+  _clearAllZones() {
+    const zoneIds = (this.zoneConfig || []).map((zone) => zone.id);
+    this.zones = [];
+    this._resetDrawingState();
+    this.drawGrid();
+    zoneIds.forEach((id) => this.updateHomeAssistantShape(id, 'none', null));
+    if (zoneIds.length) {
+      this._notify('All zones cleared');
     }
   }
 
@@ -617,7 +862,7 @@ class ZoneMapperCard extends HTMLElement {
     if (this._activeInput && ((isTouch && this._activeInput !== 'touch') || (!isTouch && this._activeInput !== 'mouse'))) {
       return;
     }
-    if (this.drawMode === 'polygon') {
+    if (this.drawMode === DRAW_MODES.POLYGON) {
       // Add a vertex on each mouse/touch end
       const p = this._getPointFromEvent(e);
       const vx = this.pixelsToValue(p.x, 'x');
@@ -648,11 +893,14 @@ class ZoneMapperCard extends HTMLElement {
       return;
     }
     this.isDrawing = false;
+    if (!this.startPoint) {
+      this._activeInput = null;
+      return;
+    }
     const endPoint = this._getPointFromEvent(e);
-    const zone = this.zones.find(z => z.id === this.selectedZone);
     // Convert drawn zones to mm
     let payload = null;
-    if (this.drawMode === 'rect') {
+    if (this.drawMode === DRAW_MODES.RECT) {
       const x_min = Math.min(
         this.pixelsToValue(this.startPoint.x, 'x'),
         this.pixelsToValue(endPoint.x, 'x')
@@ -669,13 +917,13 @@ class ZoneMapperCard extends HTMLElement {
         this.pixelsToValue(this.startPoint.y, 'y'),
         this.pixelsToValue(endPoint.y, 'y')
       );
-      payload = { shape: 'rect', data: {
+      payload = { shape: DRAW_MODES.RECT, data: {
         x_min: Math.max(this.xMin, Math.min(this.xMax, x_min)),
         x_max: Math.max(this.xMin, Math.min(this.xMax, x_max)),
         y_min: Math.max(this.yMin, Math.min(this.yMax, y_min)),
         y_max: Math.max(this.yMin, Math.min(this.yMax, y_max)),
       }};
-    } else if (this.drawMode === 'ellipse') {
+    } else if (this.drawMode === DRAW_MODES.ELLIPSE) {
       // Bounding box -> ellipse center/radii
       const x1 = this.pixelsToValue(this.startPoint.x, 'x');
       const y1 = this.pixelsToValue(this.startPoint.y, 'y');
@@ -685,25 +933,27 @@ class ZoneMapperCard extends HTMLElement {
       const cy = (y1 + y2) / 2;
       const rx = Math.abs(x2 - x1) / 2;
       const ry = Math.abs(y2 - y1) / 2;
-      payload = { shape: 'ellipse', data: { cx, cy, rx, ry } };
-    } else if (this.drawMode === 'polygon') {
+      payload = { shape: DRAW_MODES.ELLIPSE, data: { cx, cy, rx, ry } };
+    } else if (this.drawMode === DRAW_MODES.POLYGON) {
       // polygon finalization is handled by dblclick -> finishPolygon()
     }
 
     if (!payload) return;
-    const newZone = { id: this.selectedZone, ...payload.data, shape: payload.shape };
-
-    if (zone) {
-      Object.assign(zone, newZone);
-    } else {
-      this.zones.push(newZone);
-    }
+    const zoneId = this.selectedZone;
+    this._upsertZone(zoneId, payload.shape, payload.data);
     this.drawGrid();
-    this.updateZoneList();
-    this.updateHomeAssistantShape(this.selectedZone, payload.shape, payload.data);
+    this.updateHomeAssistantShape(zoneId, payload.shape, payload.data);
+    if (zoneId !== null && zoneId !== undefined) {
+      const label = this._zoneLabel(zoneId);
+      this._notify(`${label} saved`);
+    }
+    this._activeInput = null;
+    this.startPoint = null;
+    this._cursorPoint = null;
   }
 
   _getPointFromEvent(e) {
+    if (!this.canvas) return { x: 0, y: 0 };
     const rect = this.canvas.getBoundingClientRect();
     const scaleX = this.canvas.width / rect.width;
     const scaleY = this.canvas.height / rect.height;
@@ -735,25 +985,14 @@ class ZoneMapperCard extends HTMLElement {
     });
   }
 
-  updateZoneList() {
-    this.zones.forEach(zone => {
-      const item = document.createElement('div');
-      item.className = 'zone-item';
-      if (zone.shape === 'rect') {
-        item.textContent = `Zone ${zone.id} [rect]: (${zone.x_min.toFixed(0)} mm, ${zone.y_min.toFixed(0)} mm)  (${zone.x_max.toFixed(0)} mm, ${zone.y_max.toFixed(0)} mm)`;
-      } else if (zone.shape === 'ellipse') {
-        item.textContent = `Zone ${zone.id} [ellipse]: center=(${zone.cx.toFixed(0)}, ${zone.cy.toFixed(0)}) r=(${zone.rx.toFixed(0)}, ${zone.ry.toFixed(0)})`;
-      } else if (zone.shape === 'polygon') {
-        const n = Array.isArray(zone.points) ? zone.points.length : 0;
-        item.textContent = `Zone ${zone.id} [polygon]: ${n} pts`;
-      }
-    });
-  }
+
+
 
   updateZonesFromEntities() {
     if (!this._hass) return;
     const sanitizedDevice = this.location.toLowerCase().replace(/\s+/g, '_');
     let restoredEntities = null;
+    let namesUpdated = false;
     // Discover zone sensors dynamically if none are configured
     let zoneIds = new Set((this.zoneConfig || []).map(z => Number(z.id)));
     if (!this.zoneConfig || this.zoneConfig.length === 0) {
@@ -769,7 +1008,7 @@ class ZoneMapperCard extends HTMLElement {
       }
     }
     // Load each zone's attributes/state
-    Array.from(zoneIds).forEach(id => {
+    Array.from(zoneIds).sort((a, b) => Number(a) - Number(b)).forEach(id => {
       const entityId = `sensor.zone_mapper_${sanitizedDevice}_zone_${id}`;
       const state = this._hass.states[entityId];
       if (!state || !state.attributes) return;
@@ -778,18 +1017,21 @@ class ZoneMapperCard extends HTMLElement {
         const shape = attrs.shape;
         const data = attrs.data;
         if (data) {
-          const z = { id, shape, ...data };
-          const existingZone = this.zones.find(zz => zz.id === id);
-          if (existingZone) Object.assign(existingZone, z); else this.zones.push(z);
+          this._upsertZone(id, shape, data);
+        } else {
+          this._removeZone(id);
         }
       }
       // name propagation from backend (if present)
       if (attrs.name) {
         const zc = this.zoneConfig.find(z => Number(z.id) === Number(id));
-        if (zc) zc.name = attrs.name;
+        if (zc && zc.name !== attrs.name) {
+          zc.name = attrs.name;
+          namesUpdated = true;
+        }
       }
       if (typeof attrs.rotation_deg === 'number') {
-        this.coneAngleDeg = Math.max(-180, Math.min(180, Math.round(attrs.rotation_deg)));
+        this.coneAngleDeg = this._clampConeAngle(Math.round(attrs.rotation_deg));
         const angleSlider = this.shadowRoot.getElementById('coneAngleSlider');
         const angleLabel = this.shadowRoot.getElementById('coneAngleLabel');
         if (angleSlider) angleSlider.value = String(this.coneAngleDeg);
@@ -807,8 +1049,11 @@ class ZoneMapperCard extends HTMLElement {
       if (eInfo) this._selectedDeviceId = eInfo.device_id || null;
       this._renderEntitySelection();
     }
+    if (namesUpdated) {
+      this.renderZoneButtons();
+      this._renderZoneManager();
+    }
     this.drawGrid();
-    this.updateZoneList();
   }
 
   _renderZoneManager() {
@@ -843,9 +1088,11 @@ class ZoneMapperCard extends HTMLElement {
         }
         this.renderZoneButtons();
         this.drawGrid();
+        this._notify(`${this._zoneLabel(z.id)} saved`);
       });
 
       delBtn.addEventListener('click', () => {
+        const label = this._zoneLabel(z.id);
         // Delete the zone and remove its entities
         if (this._hass) {
           this._hass.callService('zone_mapper', 'update_zone', {
@@ -861,6 +1108,7 @@ class ZoneMapperCard extends HTMLElement {
         this.renderZoneButtons();
         this._renderZoneManager();
         this.drawGrid();
+        this._notify(`${label} deleted`);
       });
 
       row.appendChild(label);
@@ -878,6 +1126,7 @@ class ZoneMapperCard extends HTMLElement {
     while (ids.has(next)) next += 1;
     const newZone = { id: next, name: `Zone ${next}` };
     this.zoneConfig = [...(this.zoneConfig || []), newZone];
+    this.selectedZone = next;
     // Persist empty zone with name so entities are created and named
     if (this._hass) {
       this._hass.callService('zone_mapper', 'update_zone', {
@@ -898,24 +1147,36 @@ class ZoneMapperCard extends HTMLElement {
       if (this._polyPoints.length > this.polyMaxPoints) {
         this._polyPoints = this._polyPoints.slice(0, this.polyMaxPoints);
       }
-      const payload = { shape: 'polygon', data: { points: this._polyPoints.slice(0, this.polyMaxPoints) } };
-      const newZone = { id: this.selectedZone, ...payload.data, shape: payload.shape };
-      const zone = this.zones.find(z => z.id === this.selectedZone);
-      if (zone) Object.assign(zone, newZone); else this.zones.push(newZone);
-      this.updateHomeAssistantShape(this.selectedZone, payload.shape, payload.data);
+      const zoneId = this.selectedZone;
+      const payload = { shape: DRAW_MODES.POLYGON, data: { points: this._polyPoints.slice(0, this.polyMaxPoints) } };
+      this._upsertZone(zoneId, payload.shape, payload.data);
+      this.updateHomeAssistantShape(zoneId, payload.shape, payload.data);
+      if (zoneId !== null && zoneId !== undefined) {
+        const label = this._zoneLabel(zoneId);
+        this._notify(`${label} saved`);
+      }
     }
-    this._polyPoints = [];
-    this.isDrawing = false;
-    this._cursorPoint = null;
-    this.startPoint = null;
+    this._resetDrawingState();
     this.drawGrid();
-    this.updateZoneList();
   }
   
   drawGrid() {
+    if (!this.ctx || !this.canvas) return;
     const ctx = this.ctx;
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-    ctx.strokeStyle = '#e0e0e0';
+
+    this._drawGridLines(ctx);
+    this._drawAxes(ctx);
+
+    this.drawDeviceCone();
+
+    this.drawZones();
+    this._drawInProgress();
+    this._drawTrackedTargets();
+  }
+
+  _drawGridLines(ctx) {
+    ctx.strokeStyle = COLOR.canvas.gridLine;
     ctx.lineWidth = 1;
     ctx.beginPath();
     for (let x = this.xMin; x <= this.xMax; x += 1000) {
@@ -930,15 +1191,19 @@ class ZoneMapperCard extends HTMLElement {
     }
     ctx.stroke();
     ctx.closePath();
+  }
 
-    const originColor = this.darkMode ? '#ffffff' : '#000000';
+  _drawAxes(ctx) {
+    const originColor = this.darkMode ? COLOR.canvas.axisDark : COLOR.canvas.axisLight;
     ctx.strokeStyle = originColor;
     ctx.lineWidth = 1.5;
+
     const y0 = this.valueToPixels(0, 'y');
     ctx.beginPath();
     ctx.moveTo(0, y0);
     ctx.lineTo(this.canvas.width, y0);
     ctx.stroke();
+
     const x0 = this.valueToPixels(0, 'x');
     ctx.beginPath();
     ctx.moveTo(x0, 0);
@@ -949,52 +1214,48 @@ class ZoneMapperCard extends HTMLElement {
     ctx.beginPath();
     ctx.arc(x0, y0, 3, 0, Math.PI * 2);
     ctx.fill();
+  }
 
-    this.drawDeviceCone();
-
-    this.drawZones();
-    this._drawInProgress();
-    
-    // Draw current tracked targets
-    if (this._hass) {
-      const colors = ['#f44336', '#2196f3', '#4caf50', '#ffc107', '#9c27b0'];
-      const theta = (this.coneAngleDeg || 0) * Math.PI / 180;
-      const c = Math.cos(theta);
-      const s = Math.sin(theta);
-      const rotatePoint = (x, y) => ({ x: x * c + y * s, y: -x * s + y * c });
-      this.trackedEntities.forEach((pair, idx) => {
-        if (pair.x && pair.y && this._hass.states[pair.x] && this._hass.states[pair.y]) {
-          const xVal = parseFloat(this._hass.states[pair.x].state);
-          const yVal = parseFloat(this._hass.states[pair.y].state);
-          if (!isNaN(xVal) && !isNaN(yVal)) {
-            const rot = rotatePoint(xVal, yVal);
-            this.drawCurrentPosition(rot.x, rot.y, colors[idx % colors.length]);
-          }
-        }
-      });
-    }
+  _drawTrackedTargets() {
+    if (!this._hass) return;
+    const colors = COLOR.canvas.targetPalette;
+    const theta = (this.coneAngleDeg || 0) * Math.PI / 180;
+    const cosTheta = Math.cos(theta);
+    const sinTheta = Math.sin(theta);
+    const rotatePoint = (x, y) => ({
+      x: x * cosTheta + y * sinTheta,
+      y: -x * sinTheta + y * cosTheta,
+    });
+    this.trackedEntities.forEach((pair, idx) => {
+      if (!pair.x || !pair.y) return;
+      const stateX = this._hass.states[pair.x];
+      const stateY = this._hass.states[pair.y];
+      if (!stateX || !stateY) return;
+      const xVal = parseFloat(stateX.state);
+      const yVal = parseFloat(stateY.state);
+      if (Number.isNaN(xVal) || Number.isNaN(yVal)) return;
+      const rotated = rotatePoint(xVal, yVal);
+      this.drawCurrentPosition(rotated.x, rotated.y, colors[idx % colors.length]);
+    });
   }
   
   drawZones() {
     const ctx = this.ctx;
-    const colors = [
-      'rgba(244, 67, 54, 0.30)',
-      'rgba(33, 150, 243, 0.30)',
-      'rgba(76, 175, 80, 0.30)',
-      'rgba(255, 193, 7, 0.30)',
-      'rgba(156, 39, 176, 0.30)'
-    ];
-    this.zones.forEach((zone, idx) => {
+    const colors = COLOR.canvas.zonePalette;
+    const orderedZones = [...this.zones].sort((a, b) => Number(a.id) - Number(b.id));
+    orderedZones.forEach((zone, idx) => {
+      if (!zone || !zone.shape || !zone.data) return;
       const color = colors[(Number(zone.id) - 1) % colors.length] || colors[idx % colors.length];
       ctx.strokeStyle = color.replace('0.30', '1');
       ctx.fillStyle = color;
       ctx.lineWidth = 2;
       let bbox = null; // {x,y,width,height}
-      if (zone.shape === 'rect') {
-        const x1 = this.valueToPixels(zone.x_min, 'x');
-        const y1 = this.valueToPixels(zone.y_min, 'y');
-        const x2 = this.valueToPixels(zone.x_max, 'x');
-        const y2 = this.valueToPixels(zone.y_max, 'y');
+      if (zone.shape === DRAW_MODES.RECT) {
+        const { x_min, x_max, y_min, y_max } = zone.data;
+        const x1 = this.valueToPixels(x_min, 'x');
+        const y1 = this.valueToPixels(y_min, 'y');
+        const x2 = this.valueToPixels(x_max, 'x');
+        const y2 = this.valueToPixels(y_max, 'y');
         const x = Math.min(x1, x2);
         const y = Math.min(y1, y2);
         const width = Math.abs(x2 - x1);
@@ -1002,18 +1263,22 @@ class ZoneMapperCard extends HTMLElement {
         ctx.fillRect(x, y, width, height);
         ctx.strokeRect(x, y, width, height);
         bbox = { x, y, width, height };
-      } else if (zone.shape === 'ellipse') {
-        const cx = this.valueToPixels(zone.cx, 'x');
-        const cy = this.valueToPixels(zone.cy, 'y');
-        const rx = Math.abs(this.valueToPixels(zone.cx + zone.rx, 'x') - this.valueToPixels(zone.cx, 'x'));
-        const ry = Math.abs(this.valueToPixels(zone.cy + zone.ry, 'y') - this.valueToPixels(zone.cy, 'y'));
+      } else if (zone.shape === DRAW_MODES.ELLIPSE) {
+        const { cx, cy, rx, ry } = zone.data;
+        const cxPix = this.valueToPixels(cx, 'x');
+        const cyPix = this.valueToPixels(cy, 'y');
+        const rxPix = Math.abs(this.valueToPixels(cx + rx, 'x') - this.valueToPixels(cx, 'x'));
+        const ryPix = Math.abs(this.valueToPixels(cy + ry, 'y') - this.valueToPixels(cy, 'y'));
         ctx.beginPath();
-        ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+        ctx.ellipse(cxPix, cyPix, rxPix, ryPix, 0, 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
-        bbox = { x: cx - rx, y: cy - ry, width: rx * 2, height: ry * 2 };
-      } else if (zone.shape === 'polygon' && Array.isArray(zone.points)) {
-        const pts = zone.points.map(p => ({ x: this.valueToPixels(p.x, 'x'), y: this.valueToPixels(p.y, 'y') }));
+        bbox = { x: cxPix - rxPix, y: cyPix - ryPix, width: rxPix * 2, height: ryPix * 2 };
+      } else if (zone.shape === DRAW_MODES.POLYGON && Array.isArray(zone.data.points)) {
+        const pts = zone.data.points.map((point) => ({
+          x: this.valueToPixels(point.x, 'x'),
+          y: this.valueToPixels(point.y, 'y'),
+        }));
         if (pts.length >= 3) {
           ctx.beginPath();
           ctx.moveTo(pts[0].x, pts[0].y);
@@ -1041,11 +1306,11 @@ class ZoneMapperCard extends HTMLElement {
   _drawInProgress() {
     const ctx = this.ctx;
     // Draw in-progress indicators
-    if (this.drawMode === 'polygon' && this.isDrawing) {
+    if (this.drawMode === DRAW_MODES.POLYGON && this.isDrawing) {
       const pts = (this._polyPoints || []).map(p => ({ x: this.valueToPixels(p.x, 'x'), y: this.valueToPixels(p.y, 'y') }));
       if (pts.length >= 2) {
         ctx.save();
-        ctx.strokeStyle = this.darkMode ? 'rgba(255,255,255,0.85)' : 'rgba(33,33,33,0.85)';
+        ctx.strokeStyle = this.darkMode ? COLOR.canvas.polygonStrokeDark : COLOR.canvas.polygonStrokeLight;
         ctx.lineWidth = 2;
         ctx.setLineDash([]);
         ctx.beginPath();
@@ -1057,7 +1322,7 @@ class ZoneMapperCard extends HTMLElement {
       // Rubber-band from last point to first
       if (this._cursorPoint && (pts.length || this.startPoint)) {
         const cur = this._cursorPoint;
-        const previewColor = this.darkMode ? 'rgba(255,255,255,0.75)' : 'rgba(100,100,100,0.75)';
+        const previewColor = this.darkMode ? COLOR.canvas.polygonPreviewDark : COLOR.canvas.polygonPreviewLight;
         ctx.save();
         ctx.strokeStyle = previewColor;
         ctx.lineWidth = 1.5;
@@ -1077,8 +1342,8 @@ class ZoneMapperCard extends HTMLElement {
         ctx.restore();
       }
       ctx.save();
-      const fill = this.darkMode ? '#ffffff' : '#000000';
-      const stroke = this.darkMode ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.6)';
+      const fill = this.darkMode ? COLOR.canvas.polygonVertexFillDark : COLOR.canvas.polygonVertexFillLight;
+      const stroke = this.darkMode ? COLOR.canvas.polygonVertexStrokeDark : COLOR.canvas.polygonVertexStrokeLight;
       for (const pt of pts) {
         ctx.beginPath();
         ctx.arc(pt.x, pt.y, 3.5, 0, Math.PI * 2);
@@ -1101,11 +1366,11 @@ class ZoneMapperCard extends HTMLElement {
       ctx.restore();
     } 
     
-    else if (this.isDrawing && this.startPoint && (this.drawMode === 'rect' || this.drawMode === 'ellipse')) {
+    else if (this.isDrawing && this.startPoint && (this.drawMode === DRAW_MODES.RECT || this.drawMode === DRAW_MODES.ELLIPSE)) {
       const pt = this.startPoint;
       ctx.save();
-      const fill = this.darkMode ? '#ffffff' : '#000000';
-      const stroke = this.darkMode ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.6)';
+      const fill = this.darkMode ? COLOR.canvas.polygonVertexFillDark : COLOR.canvas.polygonVertexFillLight;
+      const stroke = this.darkMode ? COLOR.canvas.polygonVertexStrokeDark : COLOR.canvas.polygonVertexStrokeLight;
       ctx.beginPath();
       ctx.arc(pt.x, pt.y, 3.5, 0, Math.PI * 2);
       ctx.fillStyle = fill;
@@ -1119,15 +1384,14 @@ class ZoneMapperCard extends HTMLElement {
 
   _drawZoneLabel(zone, bbox) {
     const ctx = this.ctx;
-    const zoneConf = this.zoneConfig.find(zc => String(zc.id) === String(zone.id));
-    if (!zoneConf) return;
-    const label = zoneConf.name || `Zone ${zone.id}`;
+    const label = this._zoneLabel(zone.id);
+    if (!label) return;
     ctx.save();
-    ctx.font = '12px sans-serif';
-    ctx.fillStyle = this.darkMode ? '#ffffff' : '#000000';
+    ctx.font = '24px sans-serif';
+    ctx.fillStyle = this.darkMode ? COLOR.canvas.axisDark : COLOR.canvas.axisLight;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.shadowColor = this.darkMode ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.6)';
+    ctx.shadowColor = this.darkMode ? COLOR.canvas.polygonVertexStrokeDark : COLOR.canvas.polygonVertexStrokeLight;
     ctx.shadowBlur = 2;
     ctx.shadowOffsetX = 0;
     ctx.shadowOffsetY = 0;
@@ -1135,13 +1399,13 @@ class ZoneMapperCard extends HTMLElement {
     // Shape center; polygons use centroid, others use bbox center
     let cx = bbox.x + bbox.width / 2;
     let cy = bbox.y + bbox.height / 2;
-    if (zone.shape === 'polygon' && Array.isArray(zone.points) && zone.points.length >= 3) {
+    if (zone.shape === DRAW_MODES.POLYGON && Array.isArray(zone.data?.points) && zone.data.points.length >= 3) {
       let A = 0, Cx = 0, Cy = 0;
-      for (let i = 0, j = zone.points.length - 1; i < zone.points.length; j = i++) {
-        const xi = this.valueToPixels(zone.points[i].x, 'x');
-        const yi = this.valueToPixels(zone.points[i].y, 'y');
-        const xj = this.valueToPixels(zone.points[j].x, 'x');
-        const yj = this.valueToPixels(zone.points[j].y, 'y');
+      for (let i = 0, j = zone.data.points.length - 1; i < zone.data.points.length; j = i++) {
+        const xi = this.valueToPixels(zone.data.points[i].x, 'x');
+        const yi = this.valueToPixels(zone.data.points[i].y, 'y');
+        const xj = this.valueToPixels(zone.data.points[j].x, 'x');
+        const yj = this.valueToPixels(zone.data.points[j].y, 'y');
         const cross = xi * yj - xj * yi;
         A += cross;
         Cx += (xi + xj) * cross;
@@ -1158,6 +1422,7 @@ class ZoneMapperCard extends HTMLElement {
   }
 
   drawDeviceCone() {
+    if (!this.ctx || !this.canvas) return;
     const ctx = this.ctx;
     const apex = { x: 0, y: 0 };
 
@@ -1188,8 +1453,8 @@ class ZoneMapperCard extends HTMLElement {
     const step = (thetaEnd - thetaStart) / segments;
 
     ctx.save();
-    ctx.fillStyle = 'rgba(128, 233, 31, 0.06)';
-    ctx.strokeStyle = 'rgba(117, 243, 33, 0.6)';
+    ctx.fillStyle = COLOR.canvas.deviceConeFill;
+    ctx.strokeStyle = COLOR.canvas.deviceConeStroke;
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.moveTo(ax, ay);
@@ -1211,16 +1476,19 @@ class ZoneMapperCard extends HTMLElement {
   setupCanvas() {
     this.canvas = this.shadowRoot.getElementById('zoneCanvas');
     this.ctx = this.canvas.getContext('2d');
-    this.canvas.width = 400;
-    this.canvas.height = 400;
-    this.pxPerX = this.canvas.width / (this.xMax - this.xMin);
-    this.pxPerY = this.canvas.height / (this.yMax - this.yMin);
+    this.canvas.width = 800;
+    this.canvas.height = 800;
+    const safeWidth = Math.max(1, this.xMax - this.xMin);
+    const safeHeight = Math.max(1, this.yMax - this.yMin);
+    this.pxPerX = this.canvas.width / safeWidth;
+    this.pxPerY = this.canvas.height / safeHeight;
     this.drawGrid();
   }
 
   startDrawing(e) {
     if (this.isLocked) return;
     if (this.selectedZone === null) return;
+    if (!this.canvas) return;
     this.isDrawing = true;
     this._activeInput = e.touches ? 'touch' : 'mouse';
     this.startPoint = this._getPointFromEvent(e);
@@ -1236,21 +1504,21 @@ class ZoneMapperCard extends HTMLElement {
     }
     const currentPoint = this._getPointFromEvent(e);
     // polygon cache cursor point
-    if (this.drawMode === 'polygon') {
+    if (this.drawMode === DRAW_MODES.POLYGON) {
       this._cursorPoint = currentPoint;
       this.drawGrid();
       return;
     }
     this.drawGrid();
     const ctx = this.ctx;
-    ctx.strokeStyle = this.darkMode ? 'rgba(255,255,255,0.75)' : 'rgba(100, 100, 100, 0.5)';
+    ctx.strokeStyle = this.darkMode ? COLOR.canvas.drawStrokeDark : COLOR.canvas.drawStrokeLight;
     ctx.lineWidth = 2;
     ctx.setLineDash([5, 5]);
     const width = currentPoint.x - this.startPoint.x;
     const height = currentPoint.y - this.startPoint.y;
-    if (this.drawMode === 'rect') {
+    if (this.drawMode === DRAW_MODES.RECT) {
       ctx.strokeRect(this.startPoint.x, this.startPoint.y, width, height);
-    } else if (this.drawMode === 'ellipse') {
+    } else if (this.drawMode === DRAW_MODES.ELLIPSE) {
       ctx.beginPath();
       ctx.ellipse(
         this.startPoint.x + width / 2,
@@ -1266,18 +1534,20 @@ class ZoneMapperCard extends HTMLElement {
 
   valueToPixels(val, axis) {
     if (axis === 'x') {
-      return (val - this.xMin) * this.pxPerX;
+      return (val - this.xMin) * (this.pxPerX || 0);
     } else {
       // Y increases downward: map directly without flipping
-      return (val - this.yMin) * this.pxPerY;
+      return (val - this.yMin) * (this.pxPerY || 0);
     }
   }
 
   pixelsToValue(pix, axis) {
     if (axis === 'x') {
+      if (!this.pxPerX) return this.xMin;
       return pix / this.pxPerX + this.xMin;
     } else {
       // Inverse of valueToPixels when Y increases downward
+      if (!this.pxPerY) return this.yMin;
       return this.yMin + pix / this.pxPerY;
     }
   }
@@ -1289,7 +1559,7 @@ class ZoneMapperCard extends HTMLElement {
   _updatePolygonButtonsVisibility() {
     const undo = this.shadowRoot.getElementById('btnPolyUndo');
     const fin = this.shadowRoot.getElementById('btnPolyFinish');
-    const show = this.drawMode === 'polygon';
+    const show = this.drawMode === DRAW_MODES.POLYGON;
     [undo, fin].forEach(btn => {
       if (!btn) return;
       btn.style.display = show ? 'block' : 'none';
@@ -1297,18 +1567,24 @@ class ZoneMapperCard extends HTMLElement {
   }
 
   cancelDrawing() {
-    this.isDrawing = false;
-    if (this.drawMode === 'polygon') this._polyPoints = [];
-    this._cursorPoint = null;
-    this.startPoint = null;
+    this._resetDrawingState();
     this.drawGrid();
   }
 
   disconnectedCallback() {
-    window.removeEventListener('keydown', this._onKeyDown);
-    document.removeEventListener('mousedown', this._outsideClickHandler, true);
-    document.removeEventListener('touchstart', this._outsideClickHandler, true);
-    if (this._canvasResizeObserver) this._canvasResizeObserver.disconnect();
+    this._detachGlobalListeners();
+  }
+
+  _detachGlobalListeners() {
+    if (this._onKeyDown) {
+      window.removeEventListener('keydown', this._onKeyDown);
+      this._onKeyDown = null;
+    }
+    if (this._outsideClickHandler) {
+      document.removeEventListener('mousedown', this._outsideClickHandler, true);
+      document.removeEventListener('touchstart', this._outsideClickHandler, true);
+      this._outsideClickHandler = null;
+    }
   }
 
   async _ensureRegistriesLoaded() {
