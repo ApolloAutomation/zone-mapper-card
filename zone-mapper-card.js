@@ -121,6 +121,7 @@ class ZoneMapperCard extends HTMLElement {
     this.drawMode = DRAW_MODES.RECT;
     this.showModeMenu = false;
     this.isLocked = false;
+    this._lastLockWarningTs = 0;
   }
 
   // Default stub config
@@ -232,7 +233,12 @@ class ZoneMapperCard extends HTMLElement {
         .overlay-controls { position: absolute; bottom: 4px; display: flex; gap: 4px; z-index: 1; }
         .overlay-controls-left { left: 4px; flex-direction: column; align-items: flex-start; }
         .overlay-controls-right { right: 4px; }
-        .overlay-controls button { width: 30px; height: 30px; padding: 0; background: ${COLOR.ui.overlayButtonLightBg}; color: ${COLOR.ui.overlayButtonText}; border: 1px solid ${COLOR.ui.overlayButtonLightBorder}; border-radius: 8px; font-size: 11px; line-height: 1; cursor: pointer; backdrop-filter: blur(4px); }
+        .overlay-controls button { background: ${COLOR.ui.overlayButtonLightBg}; color: ${COLOR.ui.overlayButtonText}; border: none; border-radius: 6px; font-size: 11px; line-height: 1; cursor: pointer; backdrop-filter: blur(4px); display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 6px; min-height: 32px; }
+        #modeGroup button { font-size: 16px; width: 32px; height: 32px; min-width: 32px; min-height: 32px; padding: 0; }
+        #btnModeMenu { font-size: 16px; width: 32px; height: 32px; min-width: 32px; min-height: 32px; padding: 0; }
+        .overlay-controls button span { font-size: 13px; line-height: 1; }
+        .overlay-controls button.lock-toggle { padding: 6px; }
+        .overlay-controls button.lock-toggle .icon { font-size: 1.35em; line-height: 1; }
         .container.dark .overlay-controls button { background: ${COLOR.ui.overlayButtonDarkBg}; color: ${COLOR.ui.overlayButtonText}; border-color: ${COLOR.ui.overlayButtonDarkBorder}; }
         .overlay-controls button.active { outline: 2px solid ${COLOR.ui.overlayButtonActiveOutline}; }
         .overlay-controls button:disabled { opacity: 0.4; cursor: default; }
@@ -302,7 +308,7 @@ class ZoneMapperCard extends HTMLElement {
             <button id="btnModeMenu" title="Drawing modes">✎</button>
           </div>
           <div class="overlay-controls overlay-controls-right" id="overlayControlsRight">
-            <button id="btnLock" title="Lock drawing">🔓</button>
+            <button id="btnLock" class="lock-toggle" title="Lock drawing">🔓</button>
           </div>
         </div>
         <div class="controls" id="zone-buttons">
@@ -592,7 +598,7 @@ class ZoneMapperCard extends HTMLElement {
 
     if (btnLock) {
       const updateLockVisual = () => {
-        btnLock.textContent = this.isLocked ? '🔒' : '🔓';
+        btnLock.innerHTML = this.isLocked ? '<span>Locked</span><span class="icon">🔒</span>' : '<span>Unlocked</span><span class="icon">🔓</span>';
         btnLock.title = this.isLocked ? 'Unlock drawing' : 'Lock drawing';
         if (this.canvas) {
           this.canvas.style.cursor = this.isLocked ? 'not-allowed' : 'crosshair';
@@ -601,7 +607,13 @@ class ZoneMapperCard extends HTMLElement {
       btnLock.addEventListener('click', () => {
         this.isLocked = !this.isLocked;
         updateLockVisual();
-        if (this.isLocked && this.isDrawing) this.cancelDrawing();
+        this._lastLockWarningTs = 0;
+        if (this.isLocked) {
+          if (this.isDrawing) this.cancelDrawing();
+          this._notify('Drawing locked. Unlock the grid to edit zones.');
+        } else {
+          this._notify('Drawing unlocked. You can edit zones now.');
+        }
       });
       updateLockVisual();
     }
@@ -1495,7 +1507,14 @@ class ZoneMapperCard extends HTMLElement {
   }
 
   startDrawing(e) {
-    if (this.isLocked) return;
+    if (this.isLocked) {
+      const now = Date.now();
+      if (!this._lastLockWarningTs || now - this._lastLockWarningTs > 1500) {
+        this._notify('Unlock the grid before drawing.');
+        this._lastLockWarningTs = now;
+      }
+      return;
+    }
     if (this.selectedZone === null) return;
     if (!this.canvas) return;
     this.isDrawing = true;
