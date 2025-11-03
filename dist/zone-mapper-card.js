@@ -75,6 +75,44 @@ const DEFAULT_CONE = Object.freeze({
 
 const POLYGON_MAX_POINTS = 32;
 
+const LENGTH_UNITS = Object.freeze({
+  mm: 1,
+  cm: 10,
+  m: 1000,
+  in: 25.4,
+  ft: 304.8,
+});
+
+const GRID_STEP_CANDIDATES = Object.freeze({
+  in: Object.freeze([1, 2, 3, 6, 12, 24, 36, 48, 60, 72, 96, 120]),
+  ft: Object.freeze([0.25, 0.5, 1, 2, 5, 10, 20, 50, 100]),
+  default: Object.freeze([0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100]),
+});
+
+const UNIT_ALIASES = Object.freeze({
+  mm: 'mm',
+  millimeter: 'mm',
+  millimeters: 'mm',
+  millimetre: 'mm',
+  millimetres: 'mm',
+  cm: 'cm',
+  centimeter: 'cm',
+  centimeters: 'cm',
+  centimetre: 'cm',
+  centimetres: 'cm',
+  m: 'm',
+  meter: 'm',
+  meters: 'm',
+  metre: 'm',
+  metres: 'm',
+  in: 'in',
+  inch: 'in',
+  inches: 'in',
+  ft: 'ft',
+  foot: 'ft',
+  feet: 'ft',
+});
+
 function slugifyLocation(value) {
   if (!value) return '';
   let text = String(value)
@@ -88,6 +126,10 @@ function slugifyLocation(value) {
 }
 
 class ZoneMapperCard extends HTMLElement {
+  static get GRID_MIN_SPACING_PX() {
+    return 40;
+  }
+
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
@@ -122,22 +164,36 @@ class ZoneMapperCard extends HTMLElement {
     this.showModeMenu = false;
     this.isLocked = false;
     this._lastLockWarningTs = 0;
+    this.inputUnits = 'mm';
+    this.gridUnits = 'mm';
+    this.inputUnitMultiplier = LENGTH_UNITS.mm;
+    this.gridUnitMultiplier = LENGTH_UNITS.mm;
+    this.unitDisplay = false;
+    this.unitLabelSize = 18; // px
+    this._gridCache = null;
+    this._coneRingsCache = null;
   }
 
   // Default stub config
   static getStubConfig() {
     return {
       type: 'custom:zone-mapper-card',
-      location: 'Office',
       dark_mode: false,
+      unit_display: false,
+      // unit_label_size: 18,
+      // optional, px label size override
+      input_units: 'mm',
+      grid_units: 'mm',
+      location: 'Office',
+      // Units support: 'mm', 'cm', 'm', 'in', 'ft' converts to millimeters internally
       // By default, use the in-card dropdowns to select a device and X/Y entities.
       // Zones can be managed in-card; you can optionally pre-seed a list here:
       // zones: [ { id: 1, name: 'Zone 1' } ],
       grid: {
-        x_min: -5000,
-        x_max: 5000,
+        x_min: -6000,
+        x_max: 6000,
         y_min: 0,
-        y_max: 10000,
+        y_max: 12000,
       },
       // Grid is y-down oriented, so y_min is top, y_max is bottom
       cone: {
@@ -151,12 +207,25 @@ class ZoneMapperCard extends HTMLElement {
   setConfig(config) {
     // Require `location` for naming/UI and backend key
     if (!config.location) {
-      throw new Error("You must specify a location.");
+      throw new Error('You must specify a location.');
     }
 
     this.config = config;
     // Resolve location name used for UI, entity restoration, and backend
     this.location = String(config.location);
+
+    this.inputUnits = this._normalizeUnit(config.input_units);
+    this.gridUnits = this._normalizeUnit(config.grid_units);
+    this.inputUnitMultiplier = this._unitMultiplier(this.inputUnits);
+    this.gridUnitMultiplier = this._unitMultiplier(this.gridUnits);
+    this.unitDisplay = !!config.unit_display;
+    if (config.unit_label_size !== undefined) {
+      const s = Number(config.unit_label_size);
+      if (Number.isFinite(s)) {
+        // clamp between 8 and 24 px for sanity
+        this.unitLabelSize = Math.max(8, Math.min(24, Math.round(s)));
+      }
+    }
 
     this.zoneConfig = Array.isArray(config.zones) ? [...config.zones] : [];
     this.trackedEntities = this.buildTrackedEntities(config);
@@ -167,7 +236,9 @@ class ZoneMapperCard extends HTMLElement {
 
     this._applyGridConfig(config.grid);
     this._applyConeConfig(config.cone);
-    
+
+    this._invalidateGridCache();
+    this._invalidateConeCache();
     this.render();
   }
 
@@ -191,7 +262,7 @@ class ZoneMapperCard extends HTMLElement {
       return [];
     }
     const entityPairs = {};
-    entityConfig.forEach(item => {
+    entityConfig.forEach((item) => {
       const key = Object.keys(item)[0];
       const value = item[key];
       const match = key.match(/([xy])(\d+)/);
@@ -202,7 +273,7 @@ class ZoneMapperCard extends HTMLElement {
         entityPairs[index][axis] = value;
       }
     });
-    return Object.values(entityPairs).filter(pair => pair.x && pair.y);
+    return Object.values(entityPairs).filter((pair) => pair.x && pair.y);
   }
 
   buildTrackedEntities(cfg) {
@@ -214,6 +285,13 @@ class ZoneMapperCard extends HTMLElement {
   }
 
   _template() {
+    const gridUnitLabel = this._unitLabel(this.gridUnits);
+    const inputUnitLabel = this._unitLabel(this.inputUnits);
+    const displayXMin = this._formatGridValue(this.xMin);
+    const displayXMax = this._formatGridValue(this.xMax);
+    const displayYMin = this._formatGridValue(this.yMin);
+    const displayYMax = this._formatGridValue(this.yMax);
+    const displayConeRange = this._formatGridValue(this.coneYMax);
     return `
       <style>
         :host { display: block; padding: 16px; }
@@ -357,10 +435,10 @@ class ZoneMapperCard extends HTMLElement {
               </div>
             </div>
             <div class="info">
-              Click & drag for Rectangle/Ellipse. Polygon: click points, double-click to finish (max ${this.polyMaxPoints} pts). Units mm (X: ${this.xMin}..${this.xMax}, Y: ${this.yMin}..${this.yMax})
+              Click & drag for Rectangle/Ellipse. Polygon: click points, double-click to finish (max ${this.polyMaxPoints} pts). Grid units: ${gridUnitLabel} (X: ${displayXMin}..${displayXMax}, Y: ${displayYMin}..${displayYMax}). Input units: ${inputUnitLabel}. Cone range: ${displayConeRange} ${gridUnitLabel}
             </div>
           </div>
-          
+
         </div>
       </div>
     `;
@@ -387,7 +465,7 @@ class ZoneMapperCard extends HTMLElement {
     if (!this.zoneConfig || this.zoneConfig.length === 0) {
       this.selectedZone = null;
     }
-    this.zoneConfig.forEach(zone => {
+    this.zoneConfig.forEach((zone) => {
       const btn = document.createElement('button');
       btn.className = 'zone-btn';
       btn.dataset.zoneId = zone.id;
@@ -408,7 +486,9 @@ class ZoneMapperCard extends HTMLElement {
 
     const firstZone = container.querySelector('.zone-btn[data-zone-id]');
     if (this.selectedZone !== null && this.selectedZone !== undefined) {
-      const existingSelection = container.querySelector(`.zone-btn[data-zone-id="${this.selectedZone}"]`);
+      const existingSelection = container.querySelector(
+        `.zone-btn[data-zone-id="${this.selectedZone}"]`,
+      );
       if (existingSelection) {
         this._setSelectedZone(this.selectedZone);
         return;
@@ -424,7 +504,7 @@ class ZoneMapperCard extends HTMLElement {
     const ctx = this.ctx;
     const pixelX = this.valueToPixels(x, 'x');
     const pixelY = this.valueToPixels(y, 'y');
-    
+
     if (pixelX >= 0 && pixelX <= this.canvas.width && pixelY >= 0 && pixelY <= this.canvas.height) {
       ctx.fillStyle = color;
       ctx.beginPath();
@@ -473,7 +553,7 @@ class ZoneMapperCard extends HTMLElement {
         event.preventDefault();
         this.startDrawing(event);
       },
-      { passive: false }
+      { passive: false },
     );
     this.canvas.addEventListener(
       'touchmove',
@@ -481,7 +561,7 @@ class ZoneMapperCard extends HTMLElement {
         event.preventDefault();
         this.draw(event);
       },
-      { passive: false }
+      { passive: false },
     );
     this.canvas.addEventListener(
       'touchend',
@@ -489,7 +569,7 @@ class ZoneMapperCard extends HTMLElement {
         event.preventDefault();
         this.endDrawing(event);
       },
-      { passive: false }
+      { passive: false },
     );
 
     this.canvas.addEventListener('dblclick', () => {
@@ -542,6 +622,7 @@ class ZoneMapperCard extends HTMLElement {
       const value = parseInt(angleSlider.value, 10);
       if (Number.isNaN(value)) return;
       this.coneAngleDeg = this._clampConeAngle(value);
+      this._invalidateConeCache();
       updateDisplay();
       this.drawGrid();
     });
@@ -552,6 +633,7 @@ class ZoneMapperCard extends HTMLElement {
 
     angleSlider.addEventListener('dblclick', () => {
       this.coneAngleDeg = this.coneAngleDefault;
+      this._invalidateConeCache();
       updateDisplay();
       this.drawGrid();
       this._persistRotation();
@@ -577,9 +659,12 @@ class ZoneMapperCard extends HTMLElement {
       });
     }
 
-    if (btnModeRect) btnModeRect.addEventListener('click', () => this._setDrawMode(DRAW_MODES.RECT));
-    if (btnModeEllipse) btnModeEllipse.addEventListener('click', () => this._setDrawMode(DRAW_MODES.ELLIPSE));
-    if (btnModePolygon) btnModePolygon.addEventListener('click', () => this._setDrawMode(DRAW_MODES.POLYGON));
+    if (btnModeRect)
+      btnModeRect.addEventListener('click', () => this._setDrawMode(DRAW_MODES.RECT));
+    if (btnModeEllipse)
+      btnModeEllipse.addEventListener('click', () => this._setDrawMode(DRAW_MODES.ELLIPSE));
+    if (btnModePolygon)
+      btnModePolygon.addEventListener('click', () => this._setDrawMode(DRAW_MODES.POLYGON));
 
     if (btnPolyUndo) {
       btnPolyUndo.addEventListener('click', () => {
@@ -598,7 +683,9 @@ class ZoneMapperCard extends HTMLElement {
 
     if (btnLock) {
       const updateLockVisual = () => {
-        btnLock.innerHTML = this.isLocked ? '<span>Locked</span><span class="icon">🔒</span>' : '<span>Unlocked</span><span class="icon">🔓</span>';
+        btnLock.innerHTML = this.isLocked
+          ? '<span>Locked</span><span class="icon">🔒</span>'
+          : '<span>Unlocked</span><span class="icon">🔓</span>';
         btnLock.title = this.isLocked ? 'Unlock drawing' : 'Lock drawing';
         if (this.canvas) {
           this.canvas.style.cursor = this.isLocked ? 'not-allowed' : 'crosshair';
@@ -700,16 +787,16 @@ class ZoneMapperCard extends HTMLElement {
 
   _applyGridConfig(grid) {
     if (!grid || typeof grid !== 'object') return;
-    const toNumber = (value) => {
-      const num = Number(value);
-      return Number.isFinite(num) ? num : null;
+    const convert = (value) => {
+      const mmValue = this._convertToMm(value, this.gridUnits);
+      return mmValue === null ? null : mmValue;
     };
 
     const next = {
-      xMin: toNumber(grid.x_min),
-      xMax: toNumber(grid.x_max),
-      yMin: toNumber(grid.y_min),
-      yMax: toNumber(grid.y_max),
+      xMin: convert(grid.x_min),
+      xMax: convert(grid.x_max),
+      yMin: convert(grid.y_min),
+      yMax: convert(grid.y_max),
     };
 
     if (next.xMin !== null) this.xMin = next.xMin;
@@ -729,12 +816,18 @@ class ZoneMapperCard extends HTMLElement {
     if (this.yMin === this.yMax) {
       this.yMax = this.yMin + 1;
     }
+
+    this._invalidateGridCache();
+    this._invalidateConeCache();
   }
 
   _applyConeConfig(cone) {
     if (!cone || typeof cone !== 'object') return;
-    if (cone.y_max !== undefined && Number.isFinite(Number(cone.y_max))) {
-      this.coneYMax = Math.max(0, Number(cone.y_max));
+    if (cone.y_max !== undefined) {
+      const mmValue = this._convertToMm(cone.y_max, this.gridUnits);
+      if (mmValue !== null) {
+        this.coneYMax = Math.max(0, mmValue);
+      }
     }
     if (cone.fov_deg !== undefined) {
       const fov = Number(cone.fov_deg);
@@ -745,11 +838,308 @@ class ZoneMapperCard extends HTMLElement {
       this.coneAngleDefault = angle;
       this.coneAngleDeg = angle;
     }
+
+    this._invalidateConeCache();
   }
 
   _clampConeAngle(angle) {
     if (Number.isNaN(angle)) return 0;
     return Math.max(-180, Math.min(180, angle));
+  }
+
+  _clampValue(value, min, max) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return min;
+    if (min > max) return numeric;
+    return Math.max(min, Math.min(max, numeric));
+  }
+
+  _clampAndRound(value, min, max) {
+    return Math.round(this._clampValue(value, min, max));
+  }
+
+  _normalizeUnit(unit) {
+    if (unit === null || unit === undefined) return 'mm';
+    const key = String(unit).trim().toLowerCase();
+    if (!key) return 'mm';
+    const normalized = UNIT_ALIASES[key] || (LENGTH_UNITS[key] ? key : null);
+    return normalized || 'mm';
+  }
+
+  _unitMultiplier(unit) {
+    return LENGTH_UNITS[unit] || LENGTH_UNITS.mm;
+  }
+
+  _unitLabel(unit) {
+    return this._normalizeUnit(unit);
+  }
+
+  _convertToMm(value, unit) {
+    if (value === null || value === undefined) return null;
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return null;
+    return numeric * this._unitMultiplier(unit);
+  }
+
+  _mmToUnit(value, unit) {
+    if (value === null || value === undefined) return null;
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return null;
+    const multiplier = this._unitMultiplier(unit);
+    if (!multiplier) return numeric;
+    return numeric / multiplier;
+  }
+
+  _formatNumber(value) {
+    if (!Number.isFinite(value)) return '0';
+    const abs = Math.abs(value);
+    const decimals = abs >= 1000 ? 0 : abs >= 100 ? 1 : 2;
+    const rounded = Number(value.toFixed(decimals));
+    return rounded.toString();
+  }
+
+  _formatGridValue(mmValue) {
+    const converted = this._mmToUnit(mmValue, this.gridUnits);
+    if (converted === null) return '0';
+    return this._formatNumber(converted);
+  }
+
+  _gridDisplayUnit(unit) {
+    const normalized = this._normalizeUnit(unit);
+    if (normalized === 'mm') return 'm';
+    if (normalized === 'in') return 'ft';
+    return normalized;
+  }
+
+  _gridStepCandidates(unit) {
+    if (unit === 'in') return GRID_STEP_CANDIDATES.in;
+    if (unit === 'ft') return GRID_STEP_CANDIDATES.ft;
+    return GRID_STEP_CANDIDATES.default;
+  }
+
+  _countSteps(endInclusive, start, step) {
+    if (!(step > 0) || !Number.isFinite(step)) return 0;
+    return Math.floor((endInclusive - start) / step + 1e-6) + 1;
+  }
+
+  _roundKeyValue(value, precision = 1e6) {
+    if (!Number.isFinite(value)) return 0;
+    return Math.round(value * precision) / precision;
+  }
+
+  _invalidateGridCache() {
+    this._gridCache = null;
+  }
+
+  _invalidateConeCache() {
+    this._coneRingsCache = null;
+  }
+
+  _clampGridPixel(value, size) {
+    if (!Number.isFinite(value)) return 0;
+    const limit = Math.max(size - 1, 0);
+    if (value <= 0) return 0;
+    if (value >= limit) return limit;
+    return value;
+  }
+
+  _computeGridMetrics() {
+    const unit = this.gridUnits;
+    const unitMm = this._unitMultiplier(unit);
+    const pxPerMmX = this.pxPerX || 0;
+    const pxPerMmY = this.pxPerY || 0;
+    const spanX = Math.max(1, this.xMax - this.xMin);
+    const spanY = Math.max(1, this.yMax - this.yMin);
+    const candidates = this._gridStepCandidates(unit);
+    const minPxSpacing = ZoneMapperCard.GRID_MIN_SPACING_PX;
+
+    const chooseStep = (pxPerMm, spanMm) => {
+      for (let scale = 0; scale < 4; scale++) {
+        for (const stepUnits of candidates) {
+          if (stepUnits <= 0) continue;
+          const stepMm = stepUnits * unitMm * Math.pow(10, scale);
+          const px = stepMm * pxPerMm;
+          if (px >= minPxSpacing) return stepMm;
+        }
+      }
+      const fallback = Math.max(unitMm, spanMm / 10);
+      return fallback;
+    };
+
+    const stepX = chooseStep(pxPerMmX, spanX);
+    const stepY = chooseStep(pxPerMmY, spanY);
+    const startX = Math.floor(this.xMin / stepX) * stepX;
+    const startY = Math.floor(this.yMin / stepY) * stepY;
+    const endX = Math.ceil(this.xMax / stepX) * stepX;
+    const endY = Math.ceil(this.yMax / stepY) * stepY;
+    const countX = this._countSteps(endX, startX, stepX);
+    const countY = this._countSteps(endY, startY, stepY);
+
+    return {
+      unit,
+      labelUnit: this._gridDisplayUnit(unit),
+      stepX,
+      stepY,
+      startX,
+      startY,
+      endX,
+      endY,
+      pxPerMmX,
+      pxPerMmY,
+      countX,
+      countY,
+      pixelStartX: this.valueToPixels(startX, 'x'),
+      pixelStartY: this.valueToPixels(startY, 'y'),
+      skipTolX: stepX * 0.001,
+      skipTolY: stepY * 0.001,
+      pixelStepX: stepX * pxPerMmX,
+      pixelStepY: stepY * pxPerMmY,
+    };
+  }
+
+  _getGridRenderState() {
+    const canvasWidth = this.canvas?.width || 0;
+    const canvasHeight = this.canvas?.height || 0;
+    const keyParts = [
+      this._normalizeUnit(this.gridUnits),
+      this._roundKeyValue(this.xMin),
+      this._roundKeyValue(this.xMax),
+      this._roundKeyValue(this.yMin),
+      this._roundKeyValue(this.yMax),
+      this._roundKeyValue(this.pxPerX),
+      this._roundKeyValue(this.pxPerY),
+      canvasWidth,
+      canvasHeight,
+      this.unitDisplay ? 1 : 0,
+      this.unitLabelSize,
+    ];
+    const key = keyParts.join('|');
+    if (this._gridCache && this._gridCache.key === key) {
+      return this._gridCache;
+    }
+
+    const metrics = this._computeGridMetrics();
+    const hasPath2D = typeof Path2D === 'function';
+    const gridPath = hasPath2D ? new Path2D() : null;
+    const xLines = [];
+    const yLines = [];
+
+    let pixelX = metrics.pixelStartX;
+    for (let i = 0, x = metrics.startX; i < metrics.countX; i += 1, x += metrics.stepX) {
+      const drawX = metrics.pixelStepX ? pixelX : this.valueToPixels(x, 'x');
+      if (Number.isFinite(drawX)) {
+        xLines.push({ pixel: drawX, value: x });
+        if (gridPath) {
+          gridPath.moveTo(drawX, 0);
+          gridPath.lineTo(drawX, canvasHeight);
+        }
+      }
+      if (metrics.pixelStepX) {
+        pixelX += metrics.pixelStepX;
+      }
+    }
+
+    let pixelY = metrics.pixelStartY;
+    for (let i = 0, y = metrics.startY; i < metrics.countY; i += 1, y += metrics.stepY) {
+      const drawY = metrics.pixelStepY ? pixelY : this.valueToPixels(y, 'y');
+      if (Number.isFinite(drawY)) {
+        yLines.push({ pixel: drawY, value: y });
+        if (gridPath) {
+          gridPath.moveTo(0, drawY);
+          gridPath.lineTo(canvasWidth, drawY);
+        }
+      }
+      if (metrics.pixelStepY) {
+        pixelY += metrics.pixelStepY;
+      }
+    }
+
+    const labels = this._buildGridLabels(metrics, xLines, yLines, canvasWidth, canvasHeight);
+    this._gridCache = { key, metrics, gridPath, xLines, yLines, labels };
+    return this._gridCache;
+  }
+
+  _buildGridLabels(metrics, xLines, yLines, canvasWidth, canvasHeight) {
+    const labelData = { x: [], y: [] };
+    if (!this.unitDisplay) return labelData;
+
+    const y0 = this.valueToPixels(0, 'y');
+    let xLabelY;
+    let xBaseline;
+    if (Number.isFinite(y0) && y0 >= 0 && y0 <= canvasHeight) {
+      const margin = 2;
+      if (y0 > this.unitLabelSize + margin) {
+        xLabelY = y0 - margin;
+        xBaseline = 'bottom';
+      } else {
+        xLabelY = y0 + margin;
+        xBaseline = 'top';
+      }
+    } else {
+      xLabelY = canvasHeight - 2;
+      xBaseline = 'bottom';
+    }
+
+    const width = canvasWidth;
+    const height = canvasHeight;
+
+    xLines.forEach(({ pixel, value }) => {
+      if (!Number.isFinite(pixel) || pixel < -40 || pixel > width + 40) return;
+      if (Math.abs(value) < metrics.skipTolX) return;
+      const label = this._formatTickLabel(value, metrics.stepX, metrics.labelUnit);
+      labelData.x.push({
+        x: pixel,
+        y: xLabelY,
+        text: label,
+        align: 'center',
+        baseline: xBaseline,
+      });
+    });
+
+    const x0 = this.valueToPixels(0, 'x');
+    let yLabelX;
+    let yAlign;
+    if (Number.isFinite(x0) && x0 >= 0 && x0 <= width) {
+      const margin = 4;
+      if (x0 > this.unitLabelSize + margin * 2) {
+        yLabelX = x0 - margin;
+        yAlign = 'right';
+      } else {
+        yLabelX = x0 + margin;
+        yAlign = 'left';
+      }
+    } else {
+      yLabelX = 2;
+      yAlign = 'left';
+    }
+
+    yLines.forEach(({ pixel, value }) => {
+      if (!Number.isFinite(pixel) || pixel < -40 || pixel > height + 40) return;
+      if (Math.abs(value) < metrics.skipTolY) return;
+      const label = this._formatTickLabel(value, metrics.stepY, metrics.labelUnit);
+      labelData.y.push({
+        x: yLabelX,
+        y: pixel,
+        text: label,
+        align: yAlign,
+        baseline: 'middle',
+      });
+    });
+
+    return labelData;
+  }
+
+  _formatTickLabel(mmValue, stepMm, displayUnit) {
+    const unitMm = this._unitMultiplier(displayUnit);
+    const stepUnits = stepMm / unitMm;
+    const isIntegerStep = Math.abs(stepUnits - Math.round(stepUnits)) < 1e-6;
+    let decimals = 0;
+    if (!isIntegerStep && stepUnits >= 1) decimals = 1;
+    else if (stepUnits < 1 && stepUnits >= 0.5) decimals = 1;
+    else if (stepUnits < 0.5) decimals = 2;
+    const valUnits = this._mmToUnit(mmValue, displayUnit) || 0;
+    const rounded = Number(valUnits.toFixed(decimals));
+    return `${rounded}${this._unitLabel(displayUnit)}`;
   }
 
   _persistRotation() {
@@ -776,6 +1166,7 @@ class ZoneMapperCard extends HTMLElement {
     this.isDrawing = false;
     this._highlightActiveModeButton();
     this._updatePolygonButtonsVisibility();
+    this._invalidateGridCache();
     this.drawGrid();
   }
 
@@ -825,7 +1216,9 @@ class ZoneMapperCard extends HTMLElement {
       return 'Zone';
     }
     const numericId = Number(zoneId);
-    const configZone = (this.zoneConfig || []).find((zone) => Number(zone.id) === Number(numericId));
+    const configZone = (this.zoneConfig || []).find(
+      (zone) => Number(zone.id) === Number(numericId),
+    );
     const name = typeof configZone?.name === 'string' ? configZone.name.trim() : '';
     if (name) {
       return name;
@@ -880,14 +1273,17 @@ class ZoneMapperCard extends HTMLElement {
   endDrawing(e) {
     if (!this.isDrawing) return;
     const isTouch = !!(e.changedTouches || e.touches);
-    if (this._activeInput && ((isTouch && this._activeInput !== 'touch') || (!isTouch && this._activeInput !== 'mouse'))) {
+    if (
+      this._activeInput &&
+      ((isTouch && this._activeInput !== 'touch') || (!isTouch && this._activeInput !== 'mouse'))
+    ) {
       return;
     }
     if (this.drawMode === DRAW_MODES.POLYGON) {
       // Add a vertex on each mouse/touch end
       const p = this._getPointFromEvent(e);
-      const vx = this.pixelsToValue(p.x, 'x');
-      const vy = this.pixelsToValue(p.y, 'y');
+      const vx = this._clampAndRound(this.pixelsToValue(p.x, 'x'), this.xMin, this.xMax);
+      const vy = this._clampAndRound(this.pixelsToValue(p.y, 'y'), this.yMin, this.yMax);
       if (this._polyPoints.length < this.polyMaxPoints) {
         this._polyPoints.push({ x: vx, y: vy });
         // Auto-finish if we hit max and have at least 3 points
@@ -897,7 +1293,7 @@ class ZoneMapperCard extends HTMLElement {
         }
         // Double-tap / double-click detection for finishing polygon on mobile
         const now = Date.now();
-        if (this._lastPolyTap && (now - this._lastPolyTap) < 350) {
+        if (this._lastPolyTap && now - this._lastPolyTap < 350) {
           if (this._polyPoints.length >= 3) {
             this.finishPolygon();
             this._lastPolyTap = 0;
@@ -922,38 +1318,33 @@ class ZoneMapperCard extends HTMLElement {
     // Convert drawn zones to mm
     let payload = null;
     if (this.drawMode === DRAW_MODES.RECT) {
-      const x_min = Math.min(
-        this.pixelsToValue(this.startPoint.x, 'x'),
-        this.pixelsToValue(endPoint.x, 'x')
-      );
-      const x_max = Math.max(
-        this.pixelsToValue(this.startPoint.x, 'x'),
-        this.pixelsToValue(endPoint.x, 'x')
-      );
-      const y_min = Math.min(
-        this.pixelsToValue(this.startPoint.y, 'y'),
-        this.pixelsToValue(endPoint.y, 'y')
-      );
-      const y_max = Math.max(
-        this.pixelsToValue(this.startPoint.y, 'y'),
-        this.pixelsToValue(endPoint.y, 'y')
-      );
-      payload = { shape: DRAW_MODES.RECT, data: {
-        x_min: Math.max(this.xMin, Math.min(this.xMax, x_min)),
-        x_max: Math.max(this.xMin, Math.min(this.xMax, x_max)),
-        y_min: Math.max(this.yMin, Math.min(this.yMax, y_min)),
-        y_max: Math.max(this.yMin, Math.min(this.yMax, y_max)),
-      }};
+      const x1 = this.pixelsToValue(this.startPoint.x, 'x');
+      const x2 = this.pixelsToValue(endPoint.x, 'x');
+      const y1 = this.pixelsToValue(this.startPoint.y, 'y');
+      const y2 = this.pixelsToValue(endPoint.y, 'y');
+      const xMinRounded = this._clampAndRound(Math.min(x1, x2), this.xMin, this.xMax);
+      const xMaxRounded = this._clampAndRound(Math.max(x1, x2), this.xMin, this.xMax);
+      const yMinRounded = this._clampAndRound(Math.min(y1, y2), this.yMin, this.yMax);
+      const yMaxRounded = this._clampAndRound(Math.max(y1, y2), this.yMin, this.yMax);
+      payload = {
+        shape: DRAW_MODES.RECT,
+        data: {
+          x_min: xMinRounded,
+          x_max: xMaxRounded,
+          y_min: yMinRounded,
+          y_max: yMaxRounded,
+        },
+      };
     } else if (this.drawMode === DRAW_MODES.ELLIPSE) {
       // Bounding box -> ellipse center/radii
       const x1 = this.pixelsToValue(this.startPoint.x, 'x');
       const y1 = this.pixelsToValue(this.startPoint.y, 'y');
       const x2 = this.pixelsToValue(endPoint.x, 'x');
       const y2 = this.pixelsToValue(endPoint.y, 'y');
-      const cx = (x1 + x2) / 2;
-      const cy = (y1 + y2) / 2;
-      const rx = Math.abs(x2 - x1) / 2;
-      const ry = Math.abs(y2 - y1) / 2;
+      const cx = this._clampAndRound((x1 + x2) / 2, this.xMin, this.xMax);
+      const cy = this._clampAndRound((y1 + y2) / 2, this.yMin, this.yMax);
+      const rx = Math.max(1, Math.round(Math.abs(x2 - x1) / 2));
+      const ry = Math.max(1, Math.round(Math.abs(y2 - y1) / 2));
       payload = { shape: DRAW_MODES.ELLIPSE, data: { cx, cy, rx, ry } };
     } else if (this.drawMode === DRAW_MODES.POLYGON) {
       // polygon finalization is handled by dblclick -> finishPolygon()
@@ -997,17 +1388,16 @@ class ZoneMapperCard extends HTMLElement {
 
   updateHomeAssistantShape(zoneId, shape, data) {
     if (!this._hass) return;
+    const numericZoneId = Number(zoneId);
+    if (!Number.isFinite(numericZoneId) || numericZoneId <= 0) return;
     this._hass.callService('zone_mapper', 'update_zone', {
       location: this.location,
-      zone_id: zoneId,
+      zone_id: numericZoneId,
       shape,
       data,
-      entities: this.trackedEntities.filter(p => p.x && p.y)
+      entities: this.trackedEntities.filter((p) => p.x && p.y),
     });
   }
-
-
-
 
   updateZonesFromEntities() {
     if (!this._hass) return;
@@ -1015,55 +1405,63 @@ class ZoneMapperCard extends HTMLElement {
     let restoredEntities = null;
     let namesUpdated = false;
     // Discover zone sensors dynamically if none are configured
-    let zoneIds = new Set((this.zoneConfig || []).map(z => Number(z.id)));
+    const zoneIds = new Set((this.zoneConfig || []).map((z) => Number(z.id)));
     if (!this.zoneConfig || this.zoneConfig.length === 0) {
-      Object.keys(this._hass.states || {}).forEach(eid => {
+      Object.keys(this._hass.states || {}).forEach((eid) => {
         const m = eid.match(/^sensor\.zone_mapper_([a-z0-9_]+)_zone_(\d+)$/);
         if (m && m[1] === sanitizedDevice) zoneIds.add(Number(m[2]));
       });
       // Initialize local config based on discovery (if still empty)
       if (this.zoneConfig.length === 0 && zoneIds.size > 0) {
-        this.zoneConfig = Array.from(zoneIds).sort((a, b) => a - b).map(id => ({ id, name: `Zone ${id}` }));
+        this.zoneConfig = Array.from(zoneIds)
+          .sort((a, b) => a - b)
+          .map((id) => ({ id, name: `Zone ${id}` }));
         this.renderZoneButtons();
         this._renderZoneManager();
       }
     }
     // Load each zone's attributes/state
-    Array.from(zoneIds).sort((a, b) => Number(a) - Number(b)).forEach(id => {
-      const entityId = `sensor.zone_mapper_${sanitizedDevice}_zone_${id}`;
-      const state = this._hass.states[entityId];
-      if (!state || !state.attributes) return;
-      const attrs = state.attributes;
-      if ('shape' in attrs) {
-        const shape = attrs.shape;
-        const data = attrs.data;
-        if (data) {
-          this._upsertZone(id, shape, data);
-        } else {
-          this._removeZone(id);
+    Array.from(zoneIds)
+      .sort((a, b) => Number(a) - Number(b))
+      .forEach((id) => {
+        const entityId = `sensor.zone_mapper_${sanitizedDevice}_zone_${id}`;
+        const state = this._hass.states[entityId];
+        if (!state || !state.attributes) return;
+        const attrs = state.attributes;
+        if ('shape' in attrs) {
+          const shape = attrs.shape;
+          const data = attrs.data;
+          if (data) {
+            this._upsertZone(id, shape, data);
+          } else {
+            this._removeZone(id);
+          }
         }
-      }
-      // name propagation from backend (if present)
-      if (attrs.name) {
-        const zc = this.zoneConfig.find(z => Number(z.id) === Number(id));
-        if (zc && zc.name !== attrs.name) {
-          zc.name = attrs.name;
-          namesUpdated = true;
+        // name propagation from backend (if present)
+        if (attrs.name) {
+          const zc = this.zoneConfig.find((z) => Number(z.id) === Number(id));
+          if (zc && zc.name !== attrs.name) {
+            zc.name = attrs.name;
+            namesUpdated = true;
+          }
         }
-      }
-      if (typeof attrs.rotation_deg === 'number') {
-        this.coneAngleDeg = this._clampConeAngle(Math.round(attrs.rotation_deg));
-        const angleSlider = this.shadowRoot.getElementById('coneAngleSlider');
-        const angleLabel = this.shadowRoot.getElementById('coneAngleLabel');
-        if (angleSlider) angleSlider.value = String(this.coneAngleDeg);
-        if (angleLabel) angleLabel.textContent = `${this.coneAngleDeg}°`;
-      }
-      if (Array.isArray(attrs.entities) && attrs.entities.length) {
-        restoredEntities = attrs.entities;
-      }
-    });
+        if (typeof attrs.rotation_deg === 'number') {
+          const nextAngle = this._clampConeAngle(Math.round(attrs.rotation_deg));
+          if (nextAngle !== this.coneAngleDeg) {
+            this.coneAngleDeg = nextAngle;
+            this._invalidateConeCache();
+          }
+          const angleSlider = this.shadowRoot.getElementById('coneAngleSlider');
+          const angleLabel = this.shadowRoot.getElementById('coneAngleLabel');
+          if (angleSlider) angleSlider.value = String(this.coneAngleDeg);
+          if (angleLabel) angleLabel.textContent = `${this.coneAngleDeg}°`;
+        }
+        if (Array.isArray(attrs.entities) && attrs.entities.length) {
+          restoredEntities = attrs.entities;
+        }
+      });
     if (restoredEntities && (!this.trackedEntities || this.trackedEntities.length === 0)) {
-      this.trackedEntities = restoredEntities.filter(p => p && p.x && p.y);
+      this.trackedEntities = restoredEntities.filter((p) => p && p.x && p.y);
       // Try to set selected device from first pair
       const first = this.trackedEntities[0];
       const eInfo = this._findEntityInfo(first?.x) || this._findEntityInfo(first?.y);
@@ -1082,7 +1480,7 @@ class ZoneMapperCard extends HTMLElement {
     if (!host) return;
     host.innerHTML = '';
     const zones = (this.zoneConfig || []).slice().sort((a, b) => Number(a.id) - Number(b.id));
-    zones.forEach(z => {
+    zones.forEach((z) => {
       const row = document.createElement('div');
       row.className = 'entity-row';
       const label = document.createElement('label');
@@ -1101,9 +1499,14 @@ class ZoneMapperCard extends HTMLElement {
         z.name = newName;
         // Persist the friendly name to backend (no shape/data change)
         if (this._hass) {
+          const zoneId = Number(z.id);
+          if (!Number.isFinite(zoneId) || zoneId <= 0) {
+            this._notify('Unable to save name: invalid zone id');
+            return;
+          }
           this._hass.callService('zone_mapper', 'update_zone', {
             location: this.location,
-            zone_id: z.id,
+            zone_id: zoneId,
             name: newName,
           });
         }
@@ -1116,15 +1519,20 @@ class ZoneMapperCard extends HTMLElement {
         const label = this._zoneLabel(z.id);
         // Delete the zone and remove its entities
         if (this._hass) {
+          const zoneId = Number(z.id);
+          if (!Number.isFinite(zoneId) || zoneId <= 0) {
+            this._notify('Unable to delete: invalid zone id');
+            return;
+          }
           this._hass.callService('zone_mapper', 'update_zone', {
             location: this.location,
-            zone_id: z.id,
+            zone_id: zoneId,
             delete: true,
           });
         }
         // Remove from UI state
-        this.zoneConfig = (this.zoneConfig || []).filter(zz => String(zz.id) !== String(z.id));
-        this.zones = (this.zones || []).filter(zz => String(zz.id) !== String(z.id));
+        this.zoneConfig = (this.zoneConfig || []).filter((zz) => String(zz.id) !== String(z.id));
+        this.zones = (this.zones || []).filter((zz) => String(zz.id) !== String(z.id));
         if (String(this.selectedZone) === String(z.id)) this.selectedZone = null;
         this.renderZoneButtons();
         this._renderZoneManager();
@@ -1142,7 +1550,10 @@ class ZoneMapperCard extends HTMLElement {
 
   _handleAddZone() {
     // Compute next available id
-    const ids = new Set([...(this.zoneConfig || []).map(z => Number(z.id)), ...(this.zones || []).map(z => Number(z.id))]);
+    const ids = new Set([
+      ...(this.zoneConfig || []).map((z) => Number(z.id)),
+      ...(this.zones || []).map((z) => Number(z.id)),
+    ]);
     let next = 1;
     while (ids.has(next)) next += 1;
     const newZone = { id: next, name: `Zone ${next}` };
@@ -1169,7 +1580,14 @@ class ZoneMapperCard extends HTMLElement {
         this._polyPoints = this._polyPoints.slice(0, this.polyMaxPoints);
       }
       const zoneId = this.selectedZone;
-      const payload = { shape: DRAW_MODES.POLYGON, data: { points: this._polyPoints.slice(0, this.polyMaxPoints) } };
+      const points = this._polyPoints.slice(0, this.polyMaxPoints).map((pt) => ({
+        x: this._clampAndRound(pt.x, this.xMin, this.xMax),
+        y: this._clampAndRound(pt.y, this.yMin, this.yMax),
+      }));
+      const payload = {
+        shape: DRAW_MODES.POLYGON,
+        data: { points },
+      };
       this._upsertZone(zoneId, payload.shape, payload.data);
       this.updateHomeAssistantShape(zoneId, payload.shape, payload.data);
       if (zoneId !== null && zoneId !== undefined) {
@@ -1180,38 +1598,55 @@ class ZoneMapperCard extends HTMLElement {
     this._resetDrawingState();
     this.drawGrid();
   }
-  
+
   drawGrid() {
     if (!this.ctx || !this.canvas) return;
     const ctx = this.ctx;
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
-    this._drawGridLines(ctx);
+    const gridState = this._getGridRenderState();
+    const gridMetrics = gridState?.metrics;
+    if (gridState) {
+      this._drawGridLines(ctx, gridState);
+    }
     this._drawAxes(ctx);
+    if (this.unitDisplay && gridState) {
+      this._drawGridLabels(ctx, gridState.labels);
+    }
 
-    this.drawDeviceCone();
+    this.drawDeviceCone(gridMetrics);
 
     this.drawZones();
     this._drawInProgress();
     this._drawTrackedTargets();
   }
 
-  _drawGridLines(ctx) {
+  _drawGridLines(ctx, gridState) {
+    if (!gridState) return;
     ctx.strokeStyle = COLOR.canvas.gridLine;
     ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let x = this.xMin; x <= this.xMax; x += 1000) {
-      const pixelX = this.valueToPixels(x, 'x');
-      ctx.moveTo(pixelX, 0);
-      ctx.lineTo(pixelX, this.canvas.height);
+    if (gridState.gridPath) {
+      ctx.stroke(gridState.gridPath);
+      return;
     }
-    for (let y = this.yMin; y <= this.yMax; y += 1000) {
-      const pixelY = this.valueToPixels(y, 'y');
-      ctx.moveTo(0, pixelY);
-      ctx.lineTo(this.canvas.width, pixelY);
+
+    const { xLines, yLines } = gridState;
+    if ((!xLines || !xLines.length) && (!yLines || !yLines.length)) return;
+
+    ctx.beginPath();
+    if (xLines && xLines.length) {
+      xLines.forEach(({ pixel }) => {
+        ctx.moveTo(pixel, 0);
+        ctx.lineTo(pixel, this.canvas.height);
+      });
+    }
+    if (yLines && yLines.length) {
+      yLines.forEach(({ pixel }) => {
+        ctx.moveTo(0, pixel);
+        ctx.lineTo(this.canvas.width, pixel);
+      });
     }
     ctx.stroke();
-    ctx.closePath();
   }
 
   _drawAxes(ctx) {
@@ -1237,29 +1672,57 @@ class ZoneMapperCard extends HTMLElement {
     ctx.fill();
   }
 
+  _drawGridLabels(ctx, labels) {
+    if (!labels) return;
+    const axisColor = this.darkMode ? COLOR.canvas.axisDark : COLOR.canvas.axisLight;
+    ctx.save();
+    ctx.fillStyle = axisColor;
+    ctx.font = `${this.unitLabelSize}px sans-serif`;
+    if (labels.x && labels.x.length) {
+      labels.x.forEach((item) => {
+        ctx.textAlign = item.align;
+        ctx.textBaseline = item.baseline;
+        ctx.fillText(item.text, item.x, item.y);
+      });
+    }
+
+    if (labels.y && labels.y.length) {
+      labels.y.forEach((item) => {
+        ctx.textAlign = item.align;
+        ctx.textBaseline = item.baseline;
+        ctx.fillText(item.text, item.x, item.y);
+      });
+    }
+
+    ctx.restore();
+  }
+
   _drawTrackedTargets() {
     if (!this._hass) return;
     const colors = COLOR.canvas.targetPalette;
-    const theta = (this.coneAngleDeg || 0) * Math.PI / 180;
+    const theta = ((this.coneAngleDeg || 0) * Math.PI) / 180;
     const cosTheta = Math.cos(theta);
     const sinTheta = Math.sin(theta);
     const rotatePoint = (x, y) => ({
       x: x * cosTheta + y * sinTheta,
       y: -x * sinTheta + y * cosTheta,
     });
+    const multiplier = this.inputUnitMultiplier || 1;
     this.trackedEntities.forEach((pair, idx) => {
       if (!pair.x || !pair.y) return;
       const stateX = this._hass.states[pair.x];
       const stateY = this._hass.states[pair.y];
       if (!stateX || !stateY) return;
-      const xVal = parseFloat(stateX.state);
-      const yVal = parseFloat(stateY.state);
-      if (Number.isNaN(xVal) || Number.isNaN(yVal)) return;
+      const xRaw = parseFloat(stateX.state);
+      const yRaw = parseFloat(stateY.state);
+      if (Number.isNaN(xRaw) || Number.isNaN(yRaw)) return;
+      const xVal = xRaw * multiplier;
+      const yVal = yRaw * multiplier;
       const rotated = rotatePoint(xVal, yVal);
       this.drawCurrentPosition(rotated.x, rotated.y, colors[idx % colors.length]);
     });
   }
-  
+
   drawZones() {
     const ctx = this.ctx;
     const colors = COLOR.canvas.zonePalette;
@@ -1308,7 +1771,10 @@ class ZoneMapperCard extends HTMLElement {
           ctx.fill();
           ctx.stroke();
           // Compute bounding box
-          let minX = pts[0].x, minY = pts[0].y, maxX = pts[0].x, maxY = pts[0].y;
+          let minX = pts[0].x,
+            minY = pts[0].y,
+            maxX = pts[0].x,
+            maxY = pts[0].y;
           for (let i = 1; i < pts.length; i++) {
             if (pts[i].x < minX) minX = pts[i].x;
             if (pts[i].y < minY) minY = pts[i].y;
@@ -1328,10 +1794,15 @@ class ZoneMapperCard extends HTMLElement {
     const ctx = this.ctx;
     // Draw in-progress indicators
     if (this.drawMode === DRAW_MODES.POLYGON && this.isDrawing) {
-      const pts = (this._polyPoints || []).map(p => ({ x: this.valueToPixels(p.x, 'x'), y: this.valueToPixels(p.y, 'y') }));
+      const pts = (this._polyPoints || []).map((p) => ({
+        x: this.valueToPixels(p.x, 'x'),
+        y: this.valueToPixels(p.y, 'y'),
+      }));
       if (pts.length >= 2) {
         ctx.save();
-        ctx.strokeStyle = this.darkMode ? COLOR.canvas.polygonStrokeDark : COLOR.canvas.polygonStrokeLight;
+        ctx.strokeStyle = this.darkMode
+          ? COLOR.canvas.polygonStrokeDark
+          : COLOR.canvas.polygonStrokeLight;
         ctx.lineWidth = 3;
         ctx.setLineDash([]);
         ctx.beginPath();
@@ -1343,13 +1814,17 @@ class ZoneMapperCard extends HTMLElement {
       // Rubber-band from last point to first
       if (this._cursorPoint && (pts.length || this.startPoint)) {
         const cur = this._cursorPoint;
-        const previewColor = this.darkMode ? COLOR.canvas.polygonPreviewDark : COLOR.canvas.polygonPreviewLight;
+        const previewColor = this.darkMode
+          ? COLOR.canvas.polygonPreviewDark
+          : COLOR.canvas.polygonPreviewLight;
         ctx.save();
         ctx.strokeStyle = previewColor;
         ctx.lineWidth = 2;
         ctx.setLineDash([6, 6]);
         ctx.beginPath();
-        const anchor = pts.length ? pts[pts.length - 1] : { x: this.startPoint?.x ?? null, y: this.startPoint?.y ?? null };
+        const anchor = pts.length
+          ? pts[pts.length - 1]
+          : { x: this.startPoint?.x ?? null, y: this.startPoint?.y ?? null };
         if (anchor.x != null && anchor.y != null) {
           ctx.moveTo(anchor.x, anchor.y);
           ctx.lineTo(cur.x, cur.y);
@@ -1363,8 +1838,12 @@ class ZoneMapperCard extends HTMLElement {
         ctx.restore();
       }
       ctx.save();
-      const fill = this.darkMode ? COLOR.canvas.polygonVertexFillDark : COLOR.canvas.polygonVertexFillLight;
-      const stroke = this.darkMode ? COLOR.canvas.polygonVertexStrokeDark : COLOR.canvas.polygonVertexStrokeLight;
+      const fill = this.darkMode
+        ? COLOR.canvas.polygonVertexFillDark
+        : COLOR.canvas.polygonVertexFillLight;
+      const stroke = this.darkMode
+        ? COLOR.canvas.polygonVertexStrokeDark
+        : COLOR.canvas.polygonVertexStrokeLight;
       for (const pt of pts) {
         ctx.beginPath();
         ctx.arc(pt.x, pt.y, 3.5, 0, Math.PI * 2);
@@ -1385,13 +1864,19 @@ class ZoneMapperCard extends HTMLElement {
         ctx.stroke();
       }
       ctx.restore();
-    } 
-    
-    else if (this.isDrawing && this.startPoint && (this.drawMode === DRAW_MODES.RECT || this.drawMode === DRAW_MODES.ELLIPSE)) {
+    } else if (
+      this.isDrawing &&
+      this.startPoint &&
+      (this.drawMode === DRAW_MODES.RECT || this.drawMode === DRAW_MODES.ELLIPSE)
+    ) {
       const pt = this.startPoint;
       ctx.save();
-      const fill = this.darkMode ? COLOR.canvas.polygonVertexFillDark : COLOR.canvas.polygonVertexFillLight;
-      const stroke = this.darkMode ? COLOR.canvas.polygonVertexStrokeDark : COLOR.canvas.polygonVertexStrokeLight;
+      const fill = this.darkMode
+        ? COLOR.canvas.polygonVertexFillDark
+        : COLOR.canvas.polygonVertexFillLight;
+      const stroke = this.darkMode
+        ? COLOR.canvas.polygonVertexStrokeDark
+        : COLOR.canvas.polygonVertexStrokeLight;
       ctx.beginPath();
       ctx.arc(pt.x, pt.y, 3.5, 0, Math.PI * 2);
       ctx.fillStyle = fill;
@@ -1412,7 +1897,9 @@ class ZoneMapperCard extends HTMLElement {
     ctx.fillStyle = this.darkMode ? COLOR.canvas.axisDark : COLOR.canvas.axisLight;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.shadowColor = this.darkMode ? COLOR.canvas.polygonVertexStrokeDark : COLOR.canvas.polygonVertexStrokeLight;
+    ctx.shadowColor = this.darkMode
+      ? COLOR.canvas.polygonVertexStrokeDark
+      : COLOR.canvas.polygonVertexStrokeLight;
     ctx.shadowBlur = 2;
     ctx.shadowOffsetX = 0;
     ctx.shadowOffsetY = 0;
@@ -1420,8 +1907,14 @@ class ZoneMapperCard extends HTMLElement {
     // Shape center; polygons use centroid, others use bbox center
     let cx = bbox.x + bbox.width / 2;
     let cy = bbox.y + bbox.height / 2;
-    if (zone.shape === DRAW_MODES.POLYGON && Array.isArray(zone.data?.points) && zone.data.points.length >= 3) {
-      let A = 0, Cx = 0, Cy = 0;
+    if (
+      zone.shape === DRAW_MODES.POLYGON &&
+      Array.isArray(zone.data?.points) &&
+      zone.data.points.length >= 3
+    ) {
+      let A = 0,
+        Cx = 0,
+        Cy = 0;
       for (let i = 0, j = zone.data.points.length - 1; i < zone.data.points.length; j = i++) {
         const xi = this.valueToPixels(zone.data.points[i].x, 'x');
         const yi = this.valueToPixels(zone.data.points[i].y, 'y');
@@ -1442,7 +1935,7 @@ class ZoneMapperCard extends HTMLElement {
     ctx.restore();
   }
 
-  drawDeviceCone() {
+  drawDeviceCone(gridMetrics) {
     if (!this.ctx || !this.canvas) return;
     const ctx = this.ctx;
     const apex = { x: 0, y: 0 };
@@ -1456,7 +1949,9 @@ class ZoneMapperCard extends HTMLElement {
     let thetaStart = phiL + rotRad;
     let thetaEnd = phiR + rotRad;
     if (thetaStart > thetaEnd) {
-      const tmp = thetaStart; thetaStart = thetaEnd; thetaEnd = tmp;
+      const tmp = thetaStart;
+      thetaStart = thetaEnd;
+      thetaEnd = tmp;
     }
 
     const radius = Math.max(0, this.coneYMax);
@@ -1492,8 +1987,139 @@ class ZoneMapperCard extends HTMLElement {
     ctx.fill();
     ctx.stroke();
     ctx.restore();
+
+    // Draw range rings and labels within the cone when unit labels are enabled
+    if (this.unitDisplay) {
+      this._drawConeRings(thetaStart, thetaEnd, radius, gridMetrics);
+    }
   }
-  
+
+  _getConeRingsRenderState(thetaStart, thetaEnd, radius, gridMetrics) {
+    if (!this.unitDisplay) return null;
+    if (!Number.isFinite(radius) || radius <= 0) return null;
+    const angleSpan = thetaEnd - thetaStart;
+    if (!Number.isFinite(angleSpan) || Math.abs(angleSpan) < 1e-6) return null;
+
+    const gridUnit = gridMetrics ? gridMetrics.unit : this.gridUnits;
+    const imperial = gridUnit === 'in' || gridUnit === 'ft';
+    const labelUnit = imperial ? 'ft' : 'm';
+    const stepUnits = imperial ? 4 : 1;
+    const stepMm = stepUnits * this._unitMultiplier(labelUnit);
+    if (!Number.isFinite(stepMm) || stepMm <= 0) return null;
+
+    const pxPerMmX = gridMetrics ? gridMetrics.pxPerMmX : this.pxPerX || 0;
+    const pxPerMmY = gridMetrics ? gridMetrics.pxPerMmY : this.pxPerY || 0;
+    if (!pxPerMmX || !pxPerMmY) return null;
+
+    const keyParts = [
+      this._roundKeyValue(thetaStart),
+      this._roundKeyValue(thetaEnd),
+      this._roundKeyValue(radius),
+      this._roundKeyValue(pxPerMmX),
+      this._roundKeyValue(pxPerMmY),
+      this._roundKeyValue(this.xMin),
+      this._roundKeyValue(this.yMin),
+      labelUnit,
+      stepMm,
+      this.canvas?.width || 0,
+      this.canvas?.height || 0,
+    ];
+    const key = keyParts.join('|');
+    if (this._coneRingsCache && this._coneRingsCache.key === key) {
+      return this._coneRingsCache;
+    }
+
+    const hasPath2D = typeof Path2D === 'function';
+    const ringsPath = hasPath2D ? new Path2D() : null;
+    const rings = [];
+    const labels = [];
+
+    const segments = 48;
+    const angStep = angleSpan / segments;
+    const sinStep = Math.sin(angStep);
+    const cosStep = Math.cos(angStep);
+    const sinStart = Math.sin(thetaStart);
+    const cosStart = Math.cos(thetaStart);
+    const offsetX = -this.xMin * pxPerMmX;
+    const offsetY = -this.yMin * pxPerMmY;
+
+    for (let r = stepMm; r <= radius + 1e-6; r += stepMm) {
+      let sinAng = sinStart;
+      let cosAng = cosStart;
+      const points = [];
+      for (let i = 0; i <= segments; i++) {
+        const x = r * sinAng;
+        const y = r * cosAng;
+        const px = x * pxPerMmX + offsetX;
+        const py = y * pxPerMmY + offsetY;
+        points.push([px, py]);
+        if (i < segments) {
+          const nextSin = sinAng * cosStep + cosAng * sinStep;
+          const nextCos = cosAng * cosStep - sinAng * sinStep;
+          sinAng = nextSin;
+          cosAng = nextCos;
+        }
+      }
+      if (ringsPath && points.length) {
+        ringsPath.moveTo(points[0][0], points[0][1]);
+        for (let idx = 1; idx < points.length; idx += 1) {
+          ringsPath.lineTo(points[idx][0], points[idx][1]);
+        }
+      }
+      rings.push(points);
+
+      const mid = (thetaStart + thetaEnd) / 2;
+      const lx = r * Math.sin(mid) * pxPerMmX + offsetX;
+      const ly = r * Math.cos(mid) * pxPerMmY + offsetY;
+      labels.push({
+        x: lx,
+        y: ly,
+        text: this._formatTickLabel(r, stepMm, labelUnit),
+      });
+    }
+
+    this._coneRingsCache = { key, path: ringsPath, rings, labels };
+    return this._coneRingsCache;
+  }
+
+  _drawConeRings(thetaStart, thetaEnd, radius, gridMetrics) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const state = this._getConeRingsRenderState(thetaStart, thetaEnd, radius, gridMetrics);
+    if (!state) return;
+
+    const axisColor = this.darkMode ? COLOR.canvas.axisDark : COLOR.canvas.axisLight;
+    ctx.save();
+    ctx.strokeStyle = COLOR.canvas.deviceConeStroke;
+    ctx.lineWidth = 1;
+    ctx.font = `${this.unitLabelSize}px sans-serif`;
+    ctx.fillStyle = axisColor;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    if (state.path) {
+      ctx.stroke(state.path);
+    } else if (state.rings && state.rings.length) {
+      ctx.beginPath();
+      state.rings.forEach((points) => {
+        if (!points.length) return;
+        ctx.moveTo(points[0][0], points[0][1]);
+        for (let idx = 1; idx < points.length; idx += 1) {
+          ctx.lineTo(points[idx][0], points[idx][1]);
+        }
+      });
+      ctx.stroke();
+    }
+
+    if (state.labels && state.labels.length) {
+      state.labels.forEach((label) => {
+        ctx.fillText(label.text, label.x, label.y);
+      });
+    }
+
+    ctx.restore();
+  }
+
   setupCanvas() {
     this.canvas = this.shadowRoot.getElementById('zoneCanvas');
     this.ctx = this.canvas.getContext('2d');
@@ -1503,6 +2129,8 @@ class ZoneMapperCard extends HTMLElement {
     const safeHeight = Math.max(1, this.yMax - this.yMin);
     this.pxPerX = this.canvas.width / safeWidth;
     this.pxPerY = this.canvas.height / safeHeight;
+    this._invalidateGridCache();
+    this._invalidateConeCache();
     this.drawGrid();
   }
 
@@ -1527,7 +2155,10 @@ class ZoneMapperCard extends HTMLElement {
   draw(e) {
     if (this.isLocked || !this.isDrawing) return;
     const isTouch = !!(e.touches || e.changedTouches);
-    if (this._activeInput && ((isTouch && this._activeInput !== 'touch') || (!isTouch && this._activeInput !== 'mouse'))) {
+    if (
+      this._activeInput &&
+      ((isTouch && this._activeInput !== 'touch') || (!isTouch && this._activeInput !== 'mouse'))
+    ) {
       return;
     }
     const currentPoint = this._getPointFromEvent(e);
@@ -1553,7 +2184,9 @@ class ZoneMapperCard extends HTMLElement {
         this.startPoint.y + height / 2,
         Math.abs(width) / 2,
         Math.abs(height) / 2,
-        0, 0, Math.PI * 2
+        0,
+        0,
+        Math.PI * 2,
       );
       ctx.stroke();
     }
@@ -1588,7 +2221,7 @@ class ZoneMapperCard extends HTMLElement {
     const undo = this.shadowRoot.getElementById('btnPolyUndo');
     const fin = this.shadowRoot.getElementById('btnPolyFinish');
     const show = this.drawMode === DRAW_MODES.POLYGON;
-    [undo, fin].forEach(btn => {
+    [undo, fin].forEach((btn) => {
       if (!btn) return;
       btn.style.display = show ? 'block' : 'none';
     });
@@ -1625,7 +2258,9 @@ class ZoneMapperCard extends HTMLElement {
       this._allEntities = Array.isArray(entities) ? entities : [];
       // Try to pick a default device for the location if any entity matches restored pairs
       if (!this._selectedDeviceId && this.trackedEntities && this.trackedEntities.length) {
-        const info = this._findEntityInfo(this.trackedEntities[0]?.x) || this._findEntityInfo(this.trackedEntities[0]?.y);
+        const info =
+          this._findEntityInfo(this.trackedEntities[0]?.x) ||
+          this._findEntityInfo(this.trackedEntities[0]?.y);
         if (info) this._selectedDeviceId = info.device_id;
       }
       this._renderEntitySelection();
@@ -1650,7 +2285,7 @@ class ZoneMapperCard extends HTMLElement {
       return o;
     };
     devSel.appendChild(mkOpt('', '— Select device —'));
-    devices.forEach(d => {
+    devices.forEach((d) => {
       const label = d.name_by_user || d.name || d.id;
       const opt = mkOpt(d.id, label);
       if (String(d.id) === String(this._selectedDeviceId)) opt.selected = true;
@@ -1658,10 +2293,12 @@ class ZoneMapperCard extends HTMLElement {
     });
 
     // Build options for entities belonging to selected device (sensors only)
-    const deviceEntities = (this._allEntities || []).filter(e => !this._selectedDeviceId || e.device_id === this._selectedDeviceId);
+    const deviceEntities = (this._allEntities || []).filter(
+      (e) => !this._selectedDeviceId || e.device_id === this._selectedDeviceId,
+    );
     const sensorEntityIds = deviceEntities
-      .filter(e => (e.entity_id || '').startsWith('sensor.'))
-      .map(e => e.entity_id)
+      .filter((e) => e.entity_id || '')
+      .map((e) => e.entity_id)
       .sort((a, b) => a.localeCompare(b));
 
     // Render pairs
@@ -1688,7 +2325,7 @@ class ZoneMapperCard extends HTMLElement {
         noneOpt.value = '';
         noneOpt.textContent = '— Select entity —';
         sel.appendChild(noneOpt);
-        sensorEntityIds.forEach(id => {
+        sensorEntityIds.forEach((id) => {
           const o = document.createElement('option');
           o.value = id;
           o.textContent = id;
@@ -1718,20 +2355,26 @@ class ZoneMapperCard extends HTMLElement {
 
   _findEntityInfo(entityId) {
     if (!entityId) return null;
-    return (this._allEntities || []).find(e => e.entity_id === entityId) || null;
+    return (this._allEntities || []).find((e) => e.entity_id === entityId) || null;
   }
 
   _suggestPairsFromDevice(forceReplace = false) {
     if (!this._selectedDeviceId) return false;
-    const list = (this._allEntities || []).filter(e => e.device_id === this._selectedDeviceId && (e.entity_id || '').startsWith('sensor.'));
-    const xs = list.filter(e => /(^|[_-])x(\b|[_-])/.test(e.entity_id) || /_x$/.test(e.entity_id));
-    const ys = list.filter(e => /(^|[_-])y(\b|[_-])/.test(e.entity_id) || /_y$/.test(e.entity_id));
+    const list = (this._allEntities || []).filter(
+      (e) => e.device_id === this._selectedDeviceId && (e.entity_id || ''),
+    );
+    const xs = list.filter(
+      (e) => /(^|[_-])x(\b|[_-])/.test(e.entity_id) || /_x$/.test(e.entity_id),
+    );
+    const ys = list.filter(
+      (e) => /(^|[_-])y(\b|[_-])/.test(e.entity_id) || /_y$/.test(e.entity_id),
+    );
     const pairs = [];
     const used = new Set();
     // Try to pair by replacing x->y in name
-    xs.forEach(xe => {
+    xs.forEach((xe) => {
       const guessY = xe.entity_id.replace(/x(?!.*x)/, 'y').replace(/_x(?!.*_x)/, '_y');
-      const ye = list.find(e => e.entity_id === guessY) || ys.find(e => !used.has(e.entity_id));
+      const ye = list.find((e) => e.entity_id === guessY) || ys.find((e) => !used.has(e.entity_id));
       if (ye) {
         used.add(ye.entity_id);
         pairs.push({ x: xe.entity_id, y: ye.entity_id });
@@ -1739,10 +2382,17 @@ class ZoneMapperCard extends HTMLElement {
     });
     // Fallback: take numeric-looking entities two by two
     if (pairs.length === 0) {
-      const numeric = list.map(e => e.entity_id).filter(id => {
-        const st = this._hass?.states[id];
-        return st && st.state !== 'unknown' && st.state !== 'unavailable' && !Number.isNaN(parseFloat(st.state));
-      });
+      const numeric = list
+        .map((e) => e.entity_id)
+        .filter((id) => {
+          const st = this._hass?.states[id];
+          return (
+            st &&
+            st.state !== 'unknown' &&
+            st.state !== 'unavailable' &&
+            !Number.isNaN(parseFloat(st.state))
+          );
+        });
       for (let i = 0; i + 1 < numeric.length; i += 2) {
         pairs.push({ x: numeric[i], y: numeric[i + 1] });
       }
@@ -1779,5 +2429,5 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: 'zone-mapper-card',
   name: 'Zone Mapper Card',
-  description: 'Draw and manage detection zones for devices'
+  description: 'Draw and manage detection zones for devices',
 });

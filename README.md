@@ -1,6 +1,11 @@
 # Zone Mapper Lovelace Card
 
+![zone-mapper-hero](./images/hero.png)
+
 A custom Lovelace card for Home Assistant that lets you draw 2D detection zones over a grid and visualize tracked targets (for example, mmWave sensor targets). The card talks to the Zone Mapper backend integration, which persists the zones and exposes per‑zone occupancy sensors you can use in automations.
+
+> [!WARNING]
+> This integration requires the Zone Mapper backend integration for functionality. Install it from HACS or from [the repository.](put link here)
 
 ## Features
 
@@ -17,23 +22,61 @@ A custom Lovelace card for Home Assistant that lets you draw 2D detection zones 
   - Bottom‑left: a single ✎ “Draw” button toggles a vertical menu of modes (▭ Rect, ◯ Ellipse, ⬠ Polygon) that appears above it
   - Bottom‑right: 🔒 Lock toggle prevents accidental edits (disables drawing and cancels in‑progress)
   - Device and Entity pickers: choose a HA device and select X/Y sensor entity pairs directly from dropdowns; click Apply to persist
+- Multi‑unit support (front‑end only): configure input/grid in mm, cm, m, in, or ft (backend remains millimetres)
+- Adaptive, unit‑aware grid spacing with readable “nice” steps
+- Optional unit labels on axes (unit_display), with configurable font size (unit_label_size)
+- Smart display units: mm grids label in metres; inch grids label in feet
+- Device cone range rings and labels when unit_display is enabled: every 1 m (metric) or 4 ft (imperial)
+- Caching of grid lines/labels and cone rings to reduce redraw work during drags/slider moves
 
 ## Requirements
 
 - Home Assistant 2023.4+ recommended
-- Zone Mapper backend custom component installed under `custom_components/zone_mapper`
+- [Zone Mapper backend integration](put link here) installed
 - Sensor entities providing numeric X and Y coordinates for one or more targets
 
 ## Installation
 
-1) Copy the card file to your `www` folder:
-- `/config/www/zone-mapper-card.js`
+There are two ways to install this lovelace card. Both this card and [the backend integration](put link here) **must** be installed
 
-2) Add the resource in Settings → Dashboards → Resources:
-- URL: `/local/zone-mapper-card.js`
-- Type: `JavaScript Module`
+### With HACS (Recommended)
 
-3) Refresh your browser cache (Shift + Reload).
+HACS is like an app store for Home Assistant. It makes installing and updating custom cards much easier. Here's how to install using HACS:
+
+- **Install HACS if you don't have it:**
+
+  - If HACS is not installed yet, download it following the instructions on [https://hacs.xyz/docs/use/download/download/](https://hacs.xyz/docs/use/download/download/)
+  - Follow the HACS initial configuration guide at [https://hacs.xyz/docs/configuration/basic](https://hacs.xyz/docs/configuration/basic)
+
+- **Add this custom repository to HACS:**
+
+  - Go to `HACS` in your Home Assistant sidebar
+  - CLick on the 3 dots in the upper right corner
+  - Click "Custom repositories"
+  - Add this URL to the repository: `put repo link here`
+  - Select `Dashboard` for the type
+  - Click the `ADD` button
+
+- **Install Zone Mapper:**
+
+  - Go to `HACS` in your Home Assistant sidebar
+  - Search for `Zone Mapper` in HACS
+  - Click on the card when you find it
+  - Click the `Download` button at the bottom right
+  - Repeat for backend integration
+
+### Manual Installation
+
+1. Copy the card file to your `www` folder:
+
+    - `/config/www/zone-mapper-card.js`
+
+2. Add the resource in Settings → Dashboards → Resources:
+
+    - URL: `/local/zone-mapper-card.js`
+    - Type: `JavaScript Module`
+
+3. Refresh your browser cache (Control/Command + Shift + Reload).
 
 ## Backend integration
 
@@ -54,122 +97,143 @@ To clear a zone, send `data: null` (or `shape: none`).
 
 ## Card configuration
 
-When adding the card via the UI, the editor pre-fills a starter config. You can edit it inline. Example (generator-based, default):
+### Yaml Configuration
+
+The majority of the configuration and management of zones takes place on the actual card interface. Location name, theme, grid sizing, and units are handled in the yaml:
 
 ```yaml
 type: custom:zone-mapper-card
-dark_mode: false  # optional: true for dark theme styling
 location: Office  # friendly name shown on card; used to build zone entity ids
+dark_mode: false
 
-# Default: generator mode (simpler). These build entity ids like
-# sensor.<device>_<id>_<sensor>_target_<n>_{x|y}
-device: apollo_r_pro_1_w
-id: 351af0
-sensor: ld2450
-target_count: 3
+# Units (front-end only, converts to mm internally)
+input_units: mm     # mm | cm | m | in | ft
+grid_units: mm      # mm | cm | m | in | ft
+unit_display: false  # show unit-aware axis labels and cone ring labels
+unit_label_size: 18 # optional px (8..24)
 
-# add or remove zones as needed
-zones:
-  - id: 1
-    name: Zone 1
-  - id: 2
-    name: Zone 2
-  - id: 3
-    name: Zone 3
+# Zones can be managed in-card; you can optionally pre-seed a list here:
+# zones: [ { id: 1, name: 'Zone 1' } ],
 
-# Optional: override grid ranges (mm). Grid is Y‑down: y_min is top, y_max is bottom
+# Grid (units; Y‑down: y_min is top, y_max is bottom)
 grid:
-  x_min: -5000
-  x_max: 5000
+  x_min: -6000
+  x_max: 6000
   y_min: 0
-  y_max: 10000
-cone:
-  y_max: 6000     # max range (radius) to display, in mm
+  y_max: 12000
+
+# Device cone
+  y_max: 6000     # max range (radius) to display, in units
   fov_deg: 120    # total horizontal FOV in degrees (e.g., 120 => ±60°)
   angle_deg: 0    # initial rotation (-180..180); persisted and used for presence math
 ```
 
-Advanced (direct entity):
+### Using The Card
 
-```yaml
-type: custom:zone-mapper-card
-dark_mode: true
-location: Kitchen
-direct_entity: true
-zones:
-  - id: 1
-    name: Zone 1
-  - id: 2
-    name: Zone 2
-  - id: 3
-    name: Zone 3
-entities:
-  - x1: sensor.apollo_r_pro_1_w_351af0_ld2450_target_1_x
-  - y1: sensor.apollo_r_pro_1_w_351af0_ld2450_target_1_y
-  - x2: sensor.apollo_r_pro_1_w_351af0_ld2450_target_2_x
-  - y2: sensor.apollo_r_pro_1_w_351af0_ld2450_target_2_y
-  - x3: sensor.apollo_r_pro_1_w_351af0_ld2450_target_3_x
-  - y3: sensor.apollo_r_pro_1_w_351af0_ld2450_target_3_y
-```
+![zone-mapper-config](./images/config.png)
+
+#### Setting Target Entities
+
+1. Click `Configure` drop-down
+2. Click `Device and Targets` drop-down
+3. Select your device
+    - Entities attempt to auto-populate based off of device
+    - Entities can be manually configured for device
+    - For `Helper`-type entities that aren't associated with a `device` leave device selection as default —Select device— and use `Add X/Y Pair` to select entities
+4. Click `Apply` to save selection.
+
+#### Zone Management
+
+1. Click `Configure` drop-down
+2. Click `Zones` drop-down
+3. Click `Add Zone`
+4. Name your new zone
+5. Click `Save` to confirm your new zone
+    - Zones and their paired entities can be deleted here
+    - Zones can also be removed by restarting Home Assistant after removing the card and deleting from entities list
+
+#### Drawing Zones
+
+1. Select a zone via its button.
+2. Click ✎ to reveal modes; choose ▭ Rect / ◯ Ellipse / ⬠ Poly.
+3. For Rect & Ellipse: click/touch and drag to define the bounding box; release to save.
+4. For Polygon: click to place vertices; double-click or click ✓ button to finish. Backspace and ↺ button removes the last vertex; Esc cancels the in-progress polygon.
+    - Max 32 points; reaching the limit auto-finishes the polygon.
+5. Double-click a zone button to clear just that zone (sends `data: null`).
+6. Use “Clear All Zones” to clear every configured zone. This does not delete entities
+7. Toggle 🔒 to lock/unlock drawing.
+8. Target dots are drawn in different colors using the current X/Y sensor values and are rotated by the current angle.
+9. Rotate the device fov cone with the slider (−180..180).
+    - Target positions rotate in-line with cone adjustment
+    - Double click slider handle to reset rotation to default defined with `angle_deg`
+    - This also updates backend `rotation_deg` and persists across restarts. The cone displays ±(fov_deg/2). Adjust `cone.y_max` for displayed range.
+
+## Troubleshooting
+
+- First, make sure you click `Save` and `Apply` after setting up the card or making any changes
+
+- “Resource not found”:
+  - Confirm the resource URL is `/local/zone-mapper-card.js` and the file is under `/config/www`.
+  - Clear your browser cache.
+- Zones don’t persist:
+  - Check the coordinate sensor attributes for `shape`, `data`, and `rotation_deg`
+  - Ensure `zone_mapper.update_zone` is being called (Developer Tools → States/Logs)
+- Coordinate entity not found:
+  - Draw a zone once to initialize entities for the location
+- Presence sensors never turn on:
+  - Verify tracked X/Y entity states are numeric (not `unknown`/`unavailable`).
+  - Confirm the point lies within the drawn zone (correct shape & coordinates).
+- Targets dots are staying on card/triggering automations even though I have left the view:
+  - This is currently an issue with many ld2450 mmWave sensors using espHome, not related to Zone Mapper.
 
 ## Example Automation
-```
-alias: Zone 1 Trigger
-description: ""
+
+Zone Mapper creates simple binary presence entities for each location and zone. These can be quickly turned into automations using Home Assistant workflows:
+
+```yaml
+mode: restart
+max_exceeded: silent
 triggers:
   - trigger: state
-    entity_id:
-      - binary_sensor.office_r_pro_zone_1_presence
-conditions: []
+    entity_id: binary_sensor.office_zone_1_presence
+    from: "off"
+    to: "on"
 actions:
-  - choose:
-      - conditions:
-          - condition: state
-            entity_id: binary_sensor.office_r_pro_zone_1_presence
-            state: "on"
-        sequence:
-          - type: turn_on
-            device_id: f773d95a8b25204ef6ce250f5625cce5
-            entity_id: 7720ffeda30bf1ab7d7d4cde296b9e70
-            domain: light
-      - conditions:
-          - condition: state
-            entity_id: binary_sensor.office_r_pro_zone_1_presence
-            state: "off"
-        sequence:
-          - type: turn_off
-            device_id: f773d95a8b25204ef6ce250f5625cce5
-            entity_id: 7720ffeda30bf1ab7d7d4cde296b9e70
-            domain: light
-mode: single
+  - alias: Turn on the light
+    action: light.turn_on
+    target:
+      entity_id: light.office_1
+    data: {}
+  - alias: Wait until there is no motion from device
+    wait_for_trigger:
+      trigger: state
+      entity_id: binary_sensor.office_zone_1_presence
+      from: "on"
+      to: "off"
+  - alias: Wait the number of seconds that has been set
+    delay: 120
+  - alias: Turn off the light
+    action: light.turn_off
+    target:
+      entity_id: light.office_1
+    data: {}
+alias: Office Light Control
+description: ""
 ```
 
 ## Notes
 
 - Entities are created on first update for a location; draw a zone once to initialize
 - Coordinates are rounded to the nearest millimeter by the backend
+
 - The `location` is slugified using Home Assistant's rules (lowercase, punctuation removed, accents stripped, spaces → underscores) to locate coordinate sensors: `sensor.zone_mapper_<slug(location)>_zone_<id>`
 - Example: `location: "Office"` → `sensor.zone_mapper_office_zone_1`
 
-## Using the card
+## Unit semantics
 
-1. Select a zone via its button.
-2. Click ✎ to reveal modes; choose ▭ Rect / ◯ Ellipse / ⬠ Poly.
-3. For Rect & Ellipse: click/touch and drag to define the bounding box; release to save.
-4. For Polygon: click to place vertices; double-click (or double-tap) to finish. Backspace removes the last vertex; Esc cancels the in-progress polygon.
-  - Max 32 points; reaching the limit auto-finishes the polygon.
-5. Double-click a zone button to clear just that zone (sends `data: null`).
-6. Use “Clear All Zones” to clear every configured zone.
-7. Toggle 🔒 to lock/unlock drawing.
-8. Target dots are drawn in different colors using the current X/Y sensor values and are rotated by the current angle.
-9. Rotate the helper “device cone” with the slider (−180..180). This also updates backend `rotation_deg` and persists across restarts. The cone displays ±(fov_deg/2). Adjust `cone.y_max` for displayed range.
-
-Entity selection in the card:
-
-- Use the Device dropdown to filter entities by a specific HA device.
-- Add one or more X/Y pairs via “Add X/Y Pair”. Each row offers two dropdowns listing sensor entities on that device.
-- A colored dot next to each select indicates whether the current state is a valid number (green) or not (red).
-- Click Apply to save the selected entity pairs to the backend without changing any zone shapes. These persist on the coordinate sensor attributes and restore on reload.
+- The backend persists all geometry in millimetres using a Y‑down coordinate system (increasing Y goes down)
+- The card converts between your configured input_units/grid_units and mm automatically
+- Axis labels shorten mm→m and in→ft for legibility
 
 ## Mobile and touch support
 
@@ -193,7 +257,8 @@ Payload fields:
 Examples:
 
 Clear a zone:
-```
+
+```yaml
 service: zone_mapper.update_zone
 data:
   location: Office
@@ -203,7 +268,8 @@ data:
 ```
 
 Update only rotation (no zone change):
-```
+
+```yaml
 service: zone_mapper.update_zone
 data:
   location: Office
@@ -211,7 +277,8 @@ data:
 ```
 
 Update a rectangle and tracked entities:
-```
+
+```yaml
 service: zone_mapper.update_zone
 data:
   location: Office
@@ -223,26 +290,8 @@ data:
     - { x: sensor.device_target_2_x, y: sensor.device_target_2_y }
 ```
 
-## Troubleshooting
-
-- “Resource not found”:
-  - Confirm the resource URL is `/local/zone-mapper-card.js` and the file is under `/config/www`.
-  - Clear your browser cache.
-- Zones don’t persist:
-  - Check the coordinate sensor attributes for `shape`, `data`, and `rotation_deg`
-  - Ensure `zone_mapper.update_zone` is being called (Developer Tools → States/Logs)
-- Coordinate entity not found:
-  - Draw a zone once to initialize entities for the location
-- Presence sensors never turn on:
-  - Verify tracked X/Y entity states are numeric (not `unknown`/`unavailable`).
-  - Confirm the point lies within the drawn zone (correct shape & coordinates).
-- Targets dots are staying on card/triggering automations even though I have left the view:
-  - This is currently an issue with many ld2450 mmWave sensors using espHome, not related to Zone Mapper
-
 ## Development
 
 - The card is a vanilla JS Web Component; no build step is required.
 - Edit `zone-mapper-card.js` and hard refresh your dashboard.
 - The backend is a standard Home Assistant custom component (binary_sensor + sensor platforms, custom services).
-
-## License
