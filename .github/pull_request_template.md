@@ -21,7 +21,6 @@ Fixes #(issue)
 ## Checklist
 
 - [ ] I have read the [CONTRIBUTING](CONTRIBUTING.md) document
-- [ ] My code follows the code style of this project (run `scripts/lint`)
 - [ ] I have updated the documentation accordingly
 - [ ] I have updated the translations if needed
 
