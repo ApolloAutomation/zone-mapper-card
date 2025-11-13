@@ -53,7 +53,7 @@ HACS is like an app store for Home Assistant. It makes installing and updating c
   - Go to `HACS` in your Home Assistant sidebar
   - CLick on the 3 dots in the upper right corner
   - Click "Custom repositories"
-  - Add this URL to the repository: `put repo link here`
+  - Add this URL to the repository: [https://github.com/ApolloAutomation/zone-mapper-card](https://github.com/ApolloAutomation/zone-mapper-card)
   - Select `Dashboard` for the type
   - Click the `ADD` button
 
@@ -123,6 +123,7 @@ grid:
   y_max: 12000
 
 # Device cone
+device_cone:
   y_max: 6000     # max range (radius) to display, in units
   fov_deg: 120    # total horizontal FOV in degrees (e.g., 120 => ±60°)
   angle_deg: 0    # initial rotation (-180..180); persisted and used for presence math
