@@ -32,7 +32,7 @@ A custom Lovelace card for Home Assistant that lets you draw 2D detection zones 
 ## Requirements
 
 - Home Assistant 2025.9.4+ recommended
-- [Zone Mapper backend integration](https://github.com/ApolloAutomation/zone-mapper-card) installed
+- [Zone Mapper backend integration](https://github.com/ApolloAutomation/zone-mapper) installed
 - Sensor entities providing numeric X and Y coordinates for one or more targets
 
 ## Installation
