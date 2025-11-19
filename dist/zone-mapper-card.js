@@ -280,7 +280,6 @@ class ZoneMapperCard extends HTMLElement {
     if (cfg && cfg.direct_entity) {
       return this.processEntityConfig(cfg.entities);
     }
-    // Default: no preconfigured pairs; user selects via dropdowns
     return [];
   }
 
@@ -355,11 +354,22 @@ class ZoneMapperCard extends HTMLElement {
         .entity-selection { margin: 4px 0; padding: 0; background: transparent; border-radius: 0; }
         .entity-row { display: grid; grid-template-columns: auto 1fr 1fr auto; gap: 6px; align-items: center; margin: 6px 0; }
         .entity-row label { font-weight: 600; opacity: 0.95; }
-        .entity-row select { width: 100%; padding: 2px 6px; border: 1px solid var(--divider-color); border-radius: 6px; background: var(--card-background-color); color: var(--primary-text-color); font-size: 12px; height: 28px; }
-        .container.dark .entity-row select { background: ${COLOR.ui.darkSelectBg}; border-color: ${COLOR.ui.darkSelectBorder}; color: ${COLOR.ui.darkSelectText}; }
+        .entity-row select, .entity-row input { width: 100%; padding: 2px 6px; border: 1px solid var(--divider-color); border-radius: 6px; background: var(--card-background-color); color: var(--primary-text-color); font-size: 12px; height: 28px; box-sizing: border-box; }
+        .container.dark .entity-row select, .container.dark .entity-row input { background: ${COLOR.ui.darkSelectBg}; border-color: ${COLOR.ui.darkSelectBorder}; color: ${COLOR.ui.darkSelectText}; }
         .device-title { font-size: 1.2em; font-weight: bold; margin-bottom: 8px; }
         .entity-controls { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
-        .entity-controls select { width: 100%; }
+        .entity-controls select, .entity-controls input { width: 100%; }
+        .combobox-wrapper { position: relative; width: 100%; }
+        .combobox-wrapper input { width: 100%; padding-right: 24px; }
+        .combo-arrow { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); cursor: pointer; font-size: 10px; opacity: 0.7; padding: 4px; }
+        .combo-list { position: absolute; top: 100%; left: 0; right: 0; background: var(--card-background-color); border: 1px solid var(--divider-color); border-radius: 0 0 6px 6px; max-height: 200px; overflow-y: auto; z-index: 100; display: none; box-shadow: var(--ha-card-box-shadow, 0 2px 2px rgba(0,0,0,0.1)); }
+        .container.dark .combo-list { background: ${COLOR.ui.darkSelectBg}; border-color: ${COLOR.ui.darkSelectBorder}; }
+        .combo-list.open { display: block; }
+        .combo-item { padding: 6px 8px; cursor: pointer; font-size: 12px; }
+        .combo-item:hover { background: var(--secondary-background-color); }
+        .container.dark .combo-item:hover { background: ${COLOR.ui.darkZoneButtonBg}; }
+        .combo-item.selected { font-weight: bold; color: var(--primary-color); }
+        .combo-item.disabled { opacity: 0.5; cursor: default; }
         .pair-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
         .subtle { opacity: 0.85; font-size: 0.92em; }
         .config { margin-top: 0; }
@@ -409,8 +419,8 @@ class ZoneMapperCard extends HTMLElement {
             <div class="config-content ${this.showDeviceTargets ? 'open' : ''}" id="sectionDeviceTargets">
               <div class="entity-selection">
                 <div class="entity-controls">
-                  <label for="deviceSelect" class="subtle">Device</label>
-                  <select id="deviceSelect"></select>
+                  <label for="deviceInput" class="subtle">Device</label>
+                  <div class="combobox-wrapper" id="deviceComboWrapper"></div>
                   <span class="subtle">Select the HA device that owns your X/Y sensor entities.</span>
                 </div>
                 <div id="entityPairs"></div>
@@ -720,21 +730,6 @@ class ZoneMapperCard extends HTMLElement {
       });
     }
 
-    const deviceSelect = this.shadowRoot.getElementById('deviceSelect');
-    if (deviceSelect) {
-      deviceSelect.addEventListener('change', () => {
-        this._selectedDeviceId = deviceSelect.value || null;
-        if (!this._selectedDeviceId) {
-          this.trackedEntities = [];
-          this._renderEntitySelection();
-          this.drawGrid();
-          return;
-        }
-        this._suggestPairsFromDevice(true);
-        this._renderEntitySelection();
-      });
-    }
-
     const btnAddPair = this.shadowRoot.getElementById('btnAddPair');
     if (btnAddPair) {
       btnAddPair.addEventListener('click', () => {
@@ -768,7 +763,16 @@ class ZoneMapperCard extends HTMLElement {
     if (toggleDeviceTargets && caretDeviceTargets && sectionDeviceTargets) {
       toggleDeviceTargets.addEventListener('click', () => {
         this.showDeviceTargets = !this.showDeviceTargets;
-        sectionDeviceTargets.classList.toggle('open', this.showDeviceTargets);
+        if (this.showDeviceTargets) {
+          sectionDeviceTargets.classList.add('open');
+          // Allow overflow after transition so dropdowns aren't clipped
+          setTimeout(() => {
+            if (this.showDeviceTargets) sectionDeviceTargets.style.overflow = 'visible';
+          }, 300);
+        } else {
+          sectionDeviceTargets.style.overflow = 'hidden';
+          sectionDeviceTargets.classList.remove('open');
+        }
         caretDeviceTargets.textContent = this.showDeviceTargets ? '▾' : '▸';
       });
     }
@@ -1716,6 +1720,7 @@ class ZoneMapperCard extends HTMLElement {
       const xRaw = parseFloat(stateX.state);
       const yRaw = parseFloat(stateY.state);
       if (Number.isNaN(xRaw) || Number.isNaN(yRaw)) return;
+      if (Math.abs(xRaw) < 1e-6 && Math.abs(yRaw) < 1e-6) return;
       const xVal = xRaw * multiplier;
       const yVal = yRaw * multiplier;
       const rotated = rotatePoint(xVal, yVal);
@@ -2270,26 +2275,121 @@ class ZoneMapperCard extends HTMLElement {
     }
   }
 
-  _renderEntitySelection() {
-    const devSel = this.shadowRoot?.getElementById('deviceSelect');
-    const pairsDiv = this.shadowRoot?.getElementById('entityPairs');
-    if (!devSel || !pairsDiv) return;
+  _setupCombobox(wrapper, options, initialValue, onChange) {
+    wrapper.innerHTML = '';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = initialValue || '';
+    input.placeholder = 'Type to search...';
+    input.autocomplete = 'off';
 
-    // Populate device select
-    devSel.innerHTML = '';
-    const devices = this._devices || [];
-    const mkOpt = (val, label) => {
-      const o = document.createElement('option');
-      o.value = val || '';
-      o.textContent = label;
-      return o;
+    const arrow = document.createElement('span');
+    arrow.className = 'combo-arrow';
+    arrow.textContent = '▼';
+
+    const list = document.createElement('div');
+    list.className = 'combo-list';
+
+    const renderList = (filterText = '') => {
+      list.innerHTML = '';
+      const lower = filterText.toLowerCase();
+      const filtered = options.filter((opt) => String(opt).toLowerCase().includes(lower));
+
+      if (filtered.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'combo-item disabled';
+        empty.textContent = 'No matches';
+        list.appendChild(empty);
+      } else {
+        filtered.forEach((opt) => {
+          const item = document.createElement('div');
+          item.className = 'combo-item';
+          if (opt === input.value) item.classList.add('selected');
+          item.textContent = opt;
+          item.addEventListener('click', (e) => {
+            e.stopPropagation();
+            input.value = opt;
+            onChange(opt);
+            closeList();
+          });
+          list.appendChild(item);
+        });
+      }
     };
-    devSel.appendChild(mkOpt('', '— Select device —'));
-    devices.forEach((d) => {
-      const label = d.name_by_user || d.name || d.id;
-      const opt = mkOpt(d.id, label);
-      if (String(d.id) === String(this._selectedDeviceId)) opt.selected = true;
-      devSel.appendChild(opt);
+
+    const openList = () => {
+      renderList(input.value);
+      list.classList.add('open');
+    };
+
+    const closeList = () => {
+      list.classList.remove('open');
+    };
+
+    input.addEventListener('input', () => {
+      renderList(input.value);
+      if (!list.classList.contains('open')) list.classList.add('open');
+    });
+
+    input.addEventListener('focus', () => {
+      renderList(input.value);
+      list.classList.add('open');
+    });
+
+    input.addEventListener('blur', () => {
+      // Delay closing to allow item click to register
+      setTimeout(closeList, 200);
+    });
+
+    arrow.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (list.classList.contains('open')) {
+        closeList();
+      } else {
+        input.focus();
+      }
+    });
+
+    wrapper.appendChild(input);
+    wrapper.appendChild(arrow);
+    wrapper.appendChild(list);
+
+    return { input, close: closeList };
+  }
+
+  _renderEntitySelection() {
+    const devWrapper = this.shadowRoot?.getElementById('deviceComboWrapper');
+    const pairsDiv = this.shadowRoot?.getElementById('entityPairs');
+    if (!devWrapper || !pairsDiv) return;
+
+    // Populate device combobox
+    const devices = (this._devices || []).slice().sort((a, b) => {
+      const nameA = a.name_by_user || a.name || a.id;
+      const nameB = b.name_by_user || b.name || b.id;
+      return nameA.localeCompare(nameB);
+    });
+    const deviceOptions = devices.map((d) => d.name_by_user || d.name || d.id);
+
+    let currentDeviceLabel = '';
+    if (this._selectedDeviceId) {
+      const d = devices.find((dev) => String(dev.id) === String(this._selectedDeviceId));
+      if (d) currentDeviceLabel = d.name_by_user || d.name || d.id;
+    }
+
+    this._setupCombobox(devWrapper, deviceOptions, currentDeviceLabel, (val) => {
+      const device = devices.find((d) => (d.name_by_user || d.name || d.id) === val);
+      if (device) {
+        if (device.id !== this._selectedDeviceId) {
+          this._selectedDeviceId = device.id;
+          this._suggestPairsFromDevice(true);
+          this._renderEntitySelection();
+        }
+      } else if (!val) {
+        this._selectedDeviceId = null;
+        this.trackedEntities = [];
+        this._renderEntitySelection();
+        this.drawGrid();
+      }
     });
 
     // Build options for entities belonging to selected device (sensors only)
@@ -2309,8 +2409,21 @@ class ZoneMapperCard extends HTMLElement {
       row.className = 'entity-row';
       const label = document.createElement('label');
       label.textContent = `Target ${idx + 1}`;
-      const selX = document.createElement('select');
-      const selY = document.createElement('select');
+
+      const wrapperX = document.createElement('div');
+      wrapperX.className = 'combobox-wrapper';
+      this._setupCombobox(wrapperX, sensorEntityIds, pair.x, (val) => {
+        this.trackedEntities[idx].x = val;
+        this.drawGrid();
+      });
+
+      const wrapperY = document.createElement('div');
+      wrapperY.className = 'combobox-wrapper';
+      this._setupCombobox(wrapperY, sensorEntityIds, pair.y, (val) => {
+        this.trackedEntities[idx].y = val;
+        this.drawGrid();
+      });
+
       const rmBtn = document.createElement('button');
       rmBtn.textContent = 'Remove';
       rmBtn.addEventListener('click', () => {
@@ -2319,35 +2432,9 @@ class ZoneMapperCard extends HTMLElement {
         this.drawGrid();
       });
 
-      const addOptions = (sel, currentVal) => {
-        sel.innerHTML = '';
-        const noneOpt = document.createElement('option');
-        noneOpt.value = '';
-        noneOpt.textContent = '— Select entity —';
-        sel.appendChild(noneOpt);
-        sensorEntityIds.forEach((id) => {
-          const o = document.createElement('option');
-          o.value = id;
-          o.textContent = id;
-          if (currentVal && id === currentVal) o.selected = true;
-          sel.appendChild(o);
-        });
-      };
-      addOptions(selX, pair.x);
-      addOptions(selY, pair.y);
-
-      selX.addEventListener('change', () => {
-        this.trackedEntities[idx].x = selX.value || '';
-        this.drawGrid();
-      });
-      selY.addEventListener('change', () => {
-        this.trackedEntities[idx].y = selY.value || '';
-        this.drawGrid();
-      });
-
       row.appendChild(label);
-      row.appendChild(selX);
-      row.appendChild(selY);
+      row.appendChild(wrapperX);
+      row.appendChild(wrapperY);
       row.appendChild(rmBtn);
       pairsDiv.appendChild(row);
     });
