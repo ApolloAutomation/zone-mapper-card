@@ -179,6 +179,7 @@ class ZoneMapperCard extends HTMLElement {
     return {
       type: 'custom:zone-mapper-card',
       dark_mode: false,
+      start_locked: false,
       unit_display: false,
       // unit_label_size: 18,
       // optional, px label size override
@@ -214,6 +215,10 @@ class ZoneMapperCard extends HTMLElement {
     // Resolve location name used for UI, entity restoration, and backend
     this.location = String(config.location);
 
+    if (config.start_locked !== undefined) {
+      this.isLocked = !!config.start_locked;
+    }
+    
     this.inputUnits = this._normalizeUnit(config.input_units);
     this.gridUnits = this._normalizeUnit(config.grid_units);
     this.inputUnitMultiplier = this._unitMultiplier(this.inputUnits);

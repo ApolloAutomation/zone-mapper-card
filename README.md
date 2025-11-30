@@ -105,6 +105,7 @@ The majority of the configuration and management of zones takes place on the act
 type: custom:zone-mapper-card
 location: Office  # friendly name shown on card; used to build zone entity ids
 dark_mode: false
+start_locked: true # Start in lock mode
 
 # Units (front-end only, converts to mm internally)
 input_units: mm     # mm | cm | m | in | ft
