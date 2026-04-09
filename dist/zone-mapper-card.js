@@ -2276,7 +2276,6 @@ class ZoneMapperCard extends HTMLElement {
       this._renderEntitySelection();
     } catch {
       // Silently ignore; dropdowns will remain empty
-      // console.warn('Failed to load registries', _e);
     }
   }
 
@@ -2367,8 +2366,21 @@ class ZoneMapperCard extends HTMLElement {
     const pairsDiv = this.shadowRoot?.getElementById('entityPairs');
     if (!devWrapper || !pairsDiv) return;
 
-    // Populate device combobox
-    const devices = (this._devices || []).slice().sort((a, b) => {
+    // Populate device combobox — filter to LD2450-compatible devices only
+    // Detect by presence of any entity with 'ld2450' in its entity_id
+    const ld2450DeviceIds = new Set(
+      (this._allEntities || [])
+        .filter((e) => e.entity_id && e.entity_id.toLowerCase().includes('ld2450') && e.device_id)
+        .map((e) => e.device_id)
+    );
+    const devices = (this._devices || [])
+      .filter((d) => {
+        const model = (d.model || '').toLowerCase();
+        const name = (d.name_by_user || d.name || '').toLowerCase();
+        return model.includes('ld2450') || name.includes('ld2450') || ld2450DeviceIds.has(d.id);
+      })
+      .slice()
+      .sort((a, b) => {
       const nameA = a.name_by_user || a.name || a.id;
       const nameB = b.name_by_user || b.name || b.id;
       return nameA.localeCompare(nameB);
