@@ -4,8 +4,11 @@
 
 A custom Lovelace card for Home Assistant that lets you draw 2D detection zones over a grid and visualize tracked targets (for example, mmWave sensor targets). The card talks to the Zone Mapper backend integration, which persists the zones and exposes per‑zone occupancy sensors you can use in automations.
 
+> [!TIP]
+> Most users do not need to install this repo directly. The [Zone Mapper integration](https://github.com/ApolloAutomation/zone-mapper) bundles this card and registers it automatically, so a single HACS install is enough. This repo remains the source of truth for the card and is used for manual installs and development.
+
 > [!WARNING]
-> This integration requires the Zone Mapper backend integration for functionality. Install it from HACS or from [the repository.](https://github.com/ApolloAutomation/zone-mapper-card)
+> This card requires the Zone Mapper backend integration for functionality. Install it from HACS or from [the repository.](https://github.com/ApolloAutomation/zone-mapper)
 
 ## Features
 
