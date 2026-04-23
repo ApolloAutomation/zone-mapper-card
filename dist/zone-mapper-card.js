@@ -164,6 +164,8 @@ class ZoneMapperCard extends HTMLElement {
     this.showModeMenu = false;
     this.isLocked = false;
     this._lastLockWarningTs = 0;
+    this.showUndo = true;
+    this._undoSnapshot = null;
     this.inputUnits = 'mm';
     this.gridUnits = 'mm';
     this.inputUnitMultiplier = LENGTH_UNITS.mm;
@@ -180,6 +182,7 @@ class ZoneMapperCard extends HTMLElement {
       type: 'custom:zone-mapper-card',
       dark_mode: false,
       start_locked: false,
+      show_undo: true,
       unit_display: false,
       // unit_label_size: 18,
       // optional, px label size override
@@ -217,6 +220,9 @@ class ZoneMapperCard extends HTMLElement {
 
     if (config.start_locked !== undefined) {
       this.isLocked = !!config.start_locked;
+    }
+    if (config.show_undo !== undefined) {
+      this.showUndo = !!config.show_undo;
     }
     
     this.inputUnits = this._normalizeUnit(config.input_units);
@@ -320,6 +326,8 @@ class ZoneMapperCard extends HTMLElement {
         #btnModeMenu { font-size: 16px; width: 32px; height: 32px; min-width: 32px; min-height: 32px; padding: 0; }
         .overlay-controls button span { font-size: 13px; line-height: 1; }
         .overlay-controls button.lock-toggle { padding: 6px; }
+        .overlay-controls button.undo-toggle { padding: 6px; font-size: 1.1em; line-height: 1; }
+        .overlay-controls button.undo-toggle:disabled { opacity: 0.35; cursor: not-allowed; }
         .overlay-controls button.lock-toggle .icon { font-size: 1.35em; line-height: 1; }
         .container.dark .overlay-controls button { background: ${COLOR.ui.overlayButtonDarkBg}; color: ${COLOR.ui.overlayButtonText}; border-color: ${COLOR.ui.overlayButtonDarkBorder}; }
         .overlay-controls button.active { outline: 2px solid ${COLOR.ui.overlayButtonActiveOutline}; }
@@ -401,6 +409,7 @@ class ZoneMapperCard extends HTMLElement {
             <button id="btnModeMenu" title="Drawing modes">✎</button>
           </div>
           <div class="overlay-controls overlay-controls-right" id="overlayControlsRight">
+            <button id="btnUndo" class="undo-toggle" title="Undo last zone change" disabled>↶</button>
             <button id="btnLock" class="lock-toggle" title="Lock drawing">🔓</button>
           </div>
         </div>
@@ -718,6 +727,16 @@ class ZoneMapperCard extends HTMLElement {
         }
       });
       updateLockVisual();
+    }
+
+    const btnUndo = this.shadowRoot.getElementById('btnUndo');
+    if (btnUndo) {
+      if (!this.showUndo) {
+        btnUndo.style.display = 'none';
+      } else {
+        btnUndo.addEventListener('click', () => this._performUndo());
+      }
+      this._refreshUndoButton();
     }
 
     this._setDrawMode(this.drawMode || DRAW_MODES.RECT);
@@ -1256,6 +1275,9 @@ class ZoneMapperCard extends HTMLElement {
   }
 
   _clearZone(zoneId, notifyBackend = false) {
+    if (notifyBackend) {
+      this._setUndoSnapshot(this._snapshotZones([zoneId]));
+    }
     this._removeZone(zoneId);
     if (notifyBackend) {
       this.updateHomeAssistantShape(zoneId, 'none', null);
@@ -1270,6 +1292,7 @@ class ZoneMapperCard extends HTMLElement {
 
   _clearAllZones() {
     const zoneIds = (this.zoneConfig || []).map((zone) => zone.id);
+    this._setUndoSnapshot(this._snapshotZones(zoneIds));
     this.zones = [];
     this._resetDrawingState();
     this.drawGrid();
@@ -1361,6 +1384,7 @@ class ZoneMapperCard extends HTMLElement {
 
     if (!payload) return;
     const zoneId = this.selectedZone;
+    this._setUndoSnapshot(this._snapshotZones([zoneId]));
     this._upsertZone(zoneId, payload.shape, payload.data);
     this.drawGrid();
     this.updateHomeAssistantShape(zoneId, payload.shape, payload.data);
@@ -1393,6 +1417,49 @@ class ZoneMapperCard extends HTMLElement {
       x: (clientX - rect.left) * scaleX,
       y: (clientY - rect.top) * scaleY,
     };
+  }
+
+  _snapshotZones(zoneIds) {
+    const snap = [];
+    (zoneIds || []).forEach((rawId) => {
+      const id = Number(rawId);
+      if (!Number.isFinite(id) || id <= 0) return;
+      const existing = (this.zones || []).find((z) => Number(z.id) === id);
+      if (existing) {
+        snap.push({ zoneId: id, shape: existing.shape, data: existing.data });
+      } else {
+        snap.push({ zoneId: id, shape: 'none', data: null });
+      }
+    });
+    return snap;
+  }
+
+  _setUndoSnapshot(snap) {
+    this._undoSnapshot = snap && snap.length ? snap : null;
+    this._refreshUndoButton();
+  }
+
+  _refreshUndoButton() {
+    const btn = this.shadowRoot?.getElementById('btnUndo');
+    if (!btn) return;
+    btn.disabled = !(this._undoSnapshot && this._undoSnapshot.length);
+  }
+
+  _performUndo() {
+    if (!this._undoSnapshot || !this._undoSnapshot.length) return;
+    const snap = this._undoSnapshot;
+    this._undoSnapshot = null;
+    snap.forEach(({ zoneId, shape, data }) => {
+      if (shape === 'none' || !data) {
+        this._removeZone(zoneId);
+      } else {
+        this._upsertZone(zoneId, shape, data);
+      }
+      this.updateHomeAssistantShape(zoneId, shape || 'none', data == null ? null : data);
+    });
+    this.drawGrid();
+    this._notify('Undid last zone change');
+    this._refreshUndoButton();
   }
 
   updateHomeAssistantShape(zoneId, shape, data) {
@@ -1597,6 +1664,7 @@ class ZoneMapperCard extends HTMLElement {
         shape: DRAW_MODES.POLYGON,
         data: { points },
       };
+      this._setUndoSnapshot(this._snapshotZones([zoneId]));
       this._upsertZone(zoneId, payload.shape, payload.data);
       this.updateHomeAssistantShape(zoneId, payload.shape, payload.data);
       if (zoneId !== null && zoneId !== undefined) {
