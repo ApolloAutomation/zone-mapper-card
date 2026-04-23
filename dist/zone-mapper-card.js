@@ -358,6 +358,13 @@ class ZoneMapperCard extends HTMLElement {
         .container.dark .zone-item { background: ${COLOR.ui.zoneItemDarkBg}; color: ${COLOR.ui.zoneItemDarkText}; }
         .entity-selection { margin: 4px 0; padding: 0; background: transparent; border-radius: 0; }
         .entity-row { display: grid; grid-template-columns: auto 1fr 1fr auto; gap: 6px; align-items: center; margin: 6px 0; }
+        .entity-pair-row { display: grid; grid-template-columns: 1fr auto; grid-template-areas: "label remove" "x x" "y y"; gap: 6px; align-items: center; margin: 6px 0; }
+        .entity-pair-row > label { grid-area: label; font-weight: 600; opacity: 0.95; }
+        .entity-pair-row > .combobox-wrapper:nth-of-type(1) { grid-area: x; }
+        .entity-pair-row > .combobox-wrapper:nth-of-type(2) { grid-area: y; }
+        .entity-pair-row > button { grid-area: remove; }
+        .entity-pair-row select, .entity-pair-row input { width: 100%; padding: 2px 6px; border: 1px solid var(--divider-color); border-radius: 6px; background: var(--card-background-color); color: var(--primary-text-color); font-size: 12px; height: 28px; box-sizing: border-box; }
+        .container.dark .entity-pair-row select, .container.dark .entity-pair-row input { background: ${COLOR.ui.darkSelectBg}; border-color: ${COLOR.ui.darkSelectBorder}; color: ${COLOR.ui.darkSelectText}; }
         .entity-row label { font-weight: 600; opacity: 0.95; }
         .entity-row select, .entity-row input { width: 100%; padding: 2px 6px; border: 1px solid var(--divider-color); border-radius: 6px; background: var(--card-background-color); color: var(--primary-text-color); font-size: 12px; height: 28px; box-sizing: border-box; }
         .container.dark .entity-row select, .container.dark .entity-row input { background: ${COLOR.ui.darkSelectBg}; border-color: ${COLOR.ui.darkSelectBorder}; color: ${COLOR.ui.darkSelectText}; }
@@ -2424,7 +2431,7 @@ class ZoneMapperCard extends HTMLElement {
     const pairs = this.trackedEntities && this.trackedEntities.length ? this.trackedEntities : [];
     pairs.forEach((pair, idx) => {
       const row = document.createElement('div');
-      row.className = 'entity-row';
+      row.className = 'entity-pair-row';
       const label = document.createElement('label');
       label.textContent = `Target ${idx + 1}`;
 
