@@ -22,6 +22,7 @@ A custom Lovelace card for Home Assistant that lets you draw 2D detection zones 
   - Bottom‑left: a single ✎ “Draw” button toggles a vertical menu of modes (▭ Rect, ◯ Ellipse, ⬠ Polygon) that appears above it
   - Bottom‑right: 🔒 Lock toggle prevents accidental edits (disables drawing and cancels in‑progress)
   - Device and Entity pickers: choose a HA device and select X/Y sensor entity pairs directly from dropdowns; click Apply to persist
+  - The picked device and X/Y pairs are remembered per `location`, so reloading the dashboard keeps your selection
 - Multi‑unit support (front‑end only): configure input/grid in mm, cm, m, in, or ft (backend remains millimetres)
 - Adaptive, unit‑aware grid spacing with readable “nice” steps
 - Optional unit labels on axes (unit_display), with configurable font size (unit_label_size)
@@ -143,6 +144,8 @@ device_cone:
     - Entities can be manually configured for device
     - For `Helper`-type entities that aren't associated with a `device` leave device selection as default —Select device— and use `Add X/Y Pair` to select entities
 4. Click `Apply` to save selection.
+
+The card remembers the device and X/Y pairs you picked, keyed by the card's `location`, so a dashboard reload comes back to the same selection. The selection is stored in the browser, so each browser or profile picks its device once.
 
 #### Zone Management
 
