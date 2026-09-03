@@ -126,14 +126,15 @@ function slugifyLocation(value) {
 }
 
 const SELECTION_STORAGE_PREFIX = 'zone-mapper-card.selection';
+const NO_DEVICE_OPTION = '—Select device—';
 
 function selectionStorageKey(location) {
   return `${SELECTION_STORAGE_PREFIX}.${slugifyLocation(location)}`;
 }
 
-// The device/target pickers only reach the backend through a saved zone, so a card
-// with no zones yet loses the selection on every page load. Keep a browser-local
-// copy keyed by location so a reload restores whatever the user picked.
+// A saved selection only comes back from the backend through a zone sensor's
+// `entities` attribute, so a card with no zones yet has nothing to restore from.
+// Keep a browser-local copy keyed by location to cover that case.
 function readStoredSelection(location) {
   try {
     const raw = window.localStorage.getItem(selectionStorageKey(location));
@@ -1593,7 +1594,11 @@ class ZoneMapperCard extends HTMLElement {
           restoredEntities = attrs.entities;
         }
       });
-    if (restoredEntities && (!this.trackedEntities || this.trackedEntities.length === 0)) {
+    // The backend is authoritative when it has pairs; a selection that came from
+    // local storage is only a stand-in until the backend supplies one.
+    const canAdoptBackend =
+      !this.trackedEntities || this.trackedEntities.length === 0 || this._selectionFromStorage;
+    if (restoredEntities && canAdoptBackend) {
       this.trackedEntities = restoredEntities.filter((p) => p && p.x && p.y);
       // Try to set selected device from first pair
       const first = this.trackedEntities[0];
@@ -2410,13 +2415,13 @@ class ZoneMapperCard extends HTMLElement {
       ]);
       this._devices = Array.isArray(devices) ? devices : [];
       this._allEntities = Array.isArray(entities) ? entities : [];
-      // Drop a remembered selection whose device has since been removed from HA
+      // Forget a device that has since been removed from HA, but keep the entity
+      // pairs: they can be helpers, or belong to a device the user never picked
       if (
         this._selectedDeviceId &&
         !this._devices.some((d) => String(d.id) === String(this._selectedDeviceId))
       ) {
         this._selectedDeviceId = null;
-        this.trackedEntities = [];
         this._persistSelection();
       }
       // Try to pick a default device for the location if any entity matches restored pairs
@@ -2542,7 +2547,12 @@ class ZoneMapperCard extends HTMLElement {
       const nameB = b.name_by_user || b.name || b.id;
       return nameA.localeCompare(nameB);
     });
-    const deviceOptions = devices.map((d) => d.name_by_user || d.name || d.id);
+    // The combobox only reports a value when an option is clicked, so clearing the
+    // device needs an option of its own; the picked device now outlives a reload
+    const deviceOptions = [
+      NO_DEVICE_OPTION,
+      ...devices.map((d) => d.name_by_user || d.name || d.id),
+    ];
 
     let currentDeviceLabel = '';
     if (this._selectedDeviceId) {
@@ -2559,7 +2569,7 @@ class ZoneMapperCard extends HTMLElement {
           this._persistSelection();
           this._renderEntitySelection();
         }
-      } else if (!val) {
+      } else if (!val || val === NO_DEVICE_OPTION) {
         this._selectedDeviceId = null;
         this.trackedEntities = [];
         this._persistSelection();
@@ -2626,9 +2636,12 @@ class ZoneMapperCard extends HTMLElement {
     if (!stored) return;
     if (stored.deviceId) this._selectedDeviceId = stored.deviceId;
     if (stored.entities.length) this.trackedEntities = stored.entities;
+    // Marks the selection as a local guess the backend is still allowed to replace
+    this._selectionFromStorage = true;
   }
 
   _persistSelection() {
+    this._selectionFromStorage = false;
     if (this.config && this.config.direct_entity) return;
     writeStoredSelection(this.location, this._selectedDeviceId, this.trackedEntities);
   }

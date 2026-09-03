@@ -145,7 +145,7 @@ device_cone:
     - For `Helper`-type entities that aren't associated with a `device` leave device selection as default —Select device— and use `Add X/Y Pair` to select entities
 4. Click `Apply` to save selection.
 
-The card remembers the device and X/Y pairs you picked, keyed by the card's `location`, so a dashboard reload comes back to the same selection. The selection is stored in the browser, so each browser or profile picks its device once.
+The card remembers the device and X/Y pairs you picked, keyed by the card's `location`, so a dashboard reload comes back to the same selection. It is stored in the browser, so each browser or profile picks its device once; once a zone has been saved the pairs stored with it take over, keeping every browser on the same selection. Pick `—Select device—` to clear the device again and choose `Helper`-type entities by hand.
 
 #### Zone Management
 
