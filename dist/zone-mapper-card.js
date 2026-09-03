@@ -1491,27 +1491,37 @@ class ZoneMapperCard extends HTMLElement {
     let restoredEntities = null;
     let namesUpdated = false;
 
-    // Discover zone sensors dynamically by matching entity IDs in states
+    // A pre-seeded `zones:` list opts out of discovery, as it did before
+    const hasConfiguredZones = Array.isArray(this.config?.zones) && this.config.zones.length > 0;
+    // Discover zone sensors dynamically by matching entity IDs in states. HA can
+    // append a suffix when an entity id is reset, so several ids can carry the same
+    // zone number: the unsuffixed one wins, then the first suffixed one by name.
     const discoveredZoneStates = new Map();
-    Object.keys(this._hass.states || {}).forEach((eid) => {
-      const m = eid.match(/^sensor\.zone_mapper_([a-z0-9_]+)_zone_(\d+)(?:_.*)?$/);
-      if (m && m[1] === sanitizedDevice) {
+    const exactZoneIds = new Set();
+    Object.keys(this._hass.states || {})
+      .sort()
+      .forEach((eid) => {
+        const m = eid.match(/^sensor\.zone_mapper_([a-z0-9_]+)_zone_(\d+)(_.*)?$/);
+        if (!m || m[1] !== sanitizedDevice) return;
         const zoneId = Number(m[2]);
         const stateObj = this._hass.states[eid];
-        if (stateObj && stateObj.attributes) {
-          discoveredZoneStates.set(zoneId, stateObj);
+        if (!stateObj || !stateObj.attributes) return;
+        if (!m[3]) {
+          exactZoneIds.add(zoneId);
+        } else if (exactZoneIds.has(zoneId) || discoveredZoneStates.has(zoneId)) {
+          return;
         }
-      }
-    });
-
-    const zoneIds = new Set([
-      ...(this.zoneConfig || []).map((z) => Number(z.id)),
-      ...discoveredZoneStates.keys(),
-    ]);
+        discoveredZoneStates.set(zoneId, stateObj);
+      });
 
     if (!this.zoneConfig) {
       this.zoneConfig = [];
     }
+
+    const zoneIds = new Set([
+      ...this.zoneConfig.map((z) => Number(z.id)),
+      ...(hasConfiguredZones ? [] : discoveredZoneStates.keys()),
+    ]);
 
     // Load each zone's attributes/state
     Array.from(zoneIds)
@@ -1530,13 +1540,13 @@ class ZoneMapperCard extends HTMLElement {
           }
         }
 
-        // Ensure zoneConfig entry exists
+        // Ensure a zoneConfig entry exists for anything discovered
         let zc = this.zoneConfig.find((z) => Number(z.id) === Number(id));
-        if (!zc) {
+        if (!zc && !hasConfiguredZones) {
           zc = { id: Number(id), name: attrs.name || `Zone ${id}` };
           this.zoneConfig.push(zc);
           namesUpdated = true;
-        } else if (attrs.name && zc.name !== attrs.name) {
+        } else if (zc && attrs.name && zc.name !== attrs.name) {
           zc.name = attrs.name;
           namesUpdated = true;
         }
