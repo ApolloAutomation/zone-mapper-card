@@ -257,8 +257,9 @@ class ZoneMapperCard extends HTMLElement {
   set hass(hass) {
     const firstTime = !this._hass;
     this._hass = hass;
-    if (firstTime && this.canvas) {
+    if (this.canvas && (!this._entitiesRestored || firstTime)) {
       this.updateZonesFromEntities();
+      this._entitiesRestored = true;
     }
     if (this.canvas) {
       this.drawGrid();
@@ -1489,28 +1490,44 @@ class ZoneMapperCard extends HTMLElement {
     const sanitizedDevice = slugifyLocation(this.location);
     let restoredEntities = null;
     let namesUpdated = false;
-    // Discover zone sensors dynamically if none are configured
-    const zoneIds = new Set((this.zoneConfig || []).map((z) => Number(z.id)));
-    if (!this.zoneConfig || this.zoneConfig.length === 0) {
-      Object.keys(this._hass.states || {}).forEach((eid) => {
-        const m = eid.match(/^sensor\.zone_mapper_([a-z0-9_]+)_zone_(\d+)$/);
-        if (m && m[1] === sanitizedDevice) zoneIds.add(Number(m[2]));
+
+    // A pre-seeded `zones:` list opts out of discovery, as it did before
+    const hasConfiguredZones = Array.isArray(this.config?.zones) && this.config.zones.length > 0;
+    // Discover zone sensors dynamically by matching entity IDs in states. HA can
+    // append a suffix when an entity id is reset, so several ids can carry the same
+    // zone number: the unsuffixed one wins, then the first suffixed one by name.
+    const discoveredZoneStates = new Map();
+    const exactZoneIds = new Set();
+    Object.keys(this._hass.states || {})
+      .sort()
+      .forEach((eid) => {
+        const m = eid.match(/^sensor\.zone_mapper_([a-z0-9_]+)_zone_(\d+)(_.*)?$/);
+        if (!m || m[1] !== sanitizedDevice) return;
+        const zoneId = Number(m[2]);
+        const stateObj = this._hass.states[eid];
+        if (!stateObj || !stateObj.attributes) return;
+        if (!m[3]) {
+          exactZoneIds.add(zoneId);
+        } else if (exactZoneIds.has(zoneId) || discoveredZoneStates.has(zoneId)) {
+          return;
+        }
+        discoveredZoneStates.set(zoneId, stateObj);
       });
-      // Initialize local config based on discovery (if still empty)
-      if (this.zoneConfig.length === 0 && zoneIds.size > 0) {
-        this.zoneConfig = Array.from(zoneIds)
-          .sort((a, b) => a - b)
-          .map((id) => ({ id, name: `Zone ${id}` }));
-        this.renderZoneButtons();
-        this._renderZoneManager();
-      }
+
+    if (!this.zoneConfig) {
+      this.zoneConfig = [];
     }
+
+    const zoneIds = new Set([
+      ...this.zoneConfig.map((z) => Number(z.id)),
+      ...(hasConfiguredZones ? [] : discoveredZoneStates.keys()),
+    ]);
+
     // Load each zone's attributes/state
     Array.from(zoneIds)
       .sort((a, b) => Number(a) - Number(b))
       .forEach((id) => {
-        const entityId = `sensor.zone_mapper_${sanitizedDevice}_zone_${id}`;
-        const state = this._hass.states[entityId];
+        const state = discoveredZoneStates.get(id) || this._hass.states[`sensor.zone_mapper_${sanitizedDevice}_zone_${id}`];
         if (!state || !state.attributes) return;
         const attrs = state.attributes;
         if ('shape' in attrs) {
@@ -1522,22 +1539,26 @@ class ZoneMapperCard extends HTMLElement {
             this._removeZone(id);
           }
         }
-        // name propagation from backend (if present)
-        if (attrs.name) {
-          const zc = this.zoneConfig.find((z) => Number(z.id) === Number(id));
-          if (zc && zc.name !== attrs.name) {
-            zc.name = attrs.name;
-            namesUpdated = true;
-          }
+
+        // Ensure a zoneConfig entry exists for anything discovered
+        let zc = this.zoneConfig.find((z) => Number(z.id) === Number(id));
+        if (!zc && !hasConfiguredZones) {
+          zc = { id: Number(id), name: attrs.name || `Zone ${id}` };
+          this.zoneConfig.push(zc);
+          namesUpdated = true;
+        } else if (zc && attrs.name && zc.name !== attrs.name) {
+          zc.name = attrs.name;
+          namesUpdated = true;
         }
+
         if (typeof attrs.rotation_deg === 'number') {
           const nextAngle = this._clampConeAngle(Math.round(attrs.rotation_deg));
           if (nextAngle !== this.coneAngleDeg) {
             this.coneAngleDeg = nextAngle;
             this._invalidateConeCache();
           }
-          const angleSlider = this.shadowRoot.getElementById('coneAngleSlider');
-          const angleLabel = this.shadowRoot.getElementById('coneAngleLabel');
+          const angleSlider = this.shadowRoot?.getElementById('coneAngleSlider');
+          const angleLabel = this.shadowRoot?.getElementById('coneAngleLabel');
           if (angleSlider) angleSlider.value = String(this.coneAngleDeg);
           if (angleLabel) angleLabel.textContent = `${this.coneAngleDeg}°`;
         }
@@ -1545,6 +1566,7 @@ class ZoneMapperCard extends HTMLElement {
           restoredEntities = attrs.entities;
         }
       });
+
     if (restoredEntities && (!this.trackedEntities || this.trackedEntities.length === 0)) {
       this.trackedEntities = restoredEntities.filter((p) => p && p.x && p.y);
       // Try to set selected device from first pair
