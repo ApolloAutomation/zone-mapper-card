@@ -125,6 +125,54 @@ function slugifyLocation(value) {
   return text || 'unknown';
 }
 
+const SELECTION_STORAGE_PREFIX = 'zone-mapper-card.selection';
+const NO_DEVICE_OPTION = '—Select device—';
+
+function selectionStorageKey(location) {
+  return `${SELECTION_STORAGE_PREFIX}.${slugifyLocation(location)}`;
+}
+
+// A saved selection only comes back from the backend through a zone sensor's
+// `entities` attribute, so a card with no zones yet has nothing to restore from.
+// Keep a browser-local copy keyed by location to cover that case.
+function readStoredSelection(location) {
+  try {
+    const raw = window.localStorage.getItem(selectionStorageKey(location));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    const entities = Array.isArray(parsed.entities)
+      ? parsed.entities
+          .filter((pair) => pair && pair.x && pair.y)
+          .map((pair) => ({ x: String(pair.x), y: String(pair.y) }))
+      : [];
+    const deviceId = typeof parsed.device_id === 'string' ? parsed.device_id : null;
+    if (!deviceId && entities.length === 0) return null;
+    return { deviceId, entities };
+  } catch {
+    // Storage can be unavailable (private browsing, blocked cookies) or hold junk
+    return null;
+  }
+}
+
+function writeStoredSelection(location, deviceId, entities) {
+  try {
+    const pairs = (entities || [])
+      .filter((pair) => pair && pair.x && pair.y)
+      .map((pair) => ({ x: String(pair.x), y: String(pair.y) }));
+    if (!deviceId && pairs.length === 0) {
+      window.localStorage.removeItem(selectionStorageKey(location));
+      return;
+    }
+    window.localStorage.setItem(
+      selectionStorageKey(location),
+      JSON.stringify({ device_id: deviceId || null, entities: pairs }),
+    );
+  } catch {
+    // Nothing to do; the card still works for the current page load
+  }
+}
+
 class ZoneMapperCard extends HTMLElement {
   static get GRID_MIN_SPACING_PX() {
     return 40;
@@ -241,6 +289,7 @@ class ZoneMapperCard extends HTMLElement {
 
     this.zoneConfig = Array.isArray(config.zones) ? [...config.zones] : [];
     this.trackedEntities = this.buildTrackedEntities(config);
+    this._restoreSelection();
 
     if (config.dark_mode !== undefined) {
       this.darkMode = !!config.dark_mode;
@@ -768,6 +817,9 @@ class ZoneMapperCard extends HTMLElement {
     if (btnAddPair) {
       btnAddPair.addEventListener('click', () => {
         this.trackedEntities = [...(this.trackedEntities || []), { x: '', y: '' }];
+        // Writes nothing (blank pairs are filtered); keeps every mutation of
+        // trackedEntities on the same path
+        this._persistSelection();
         this._renderEntitySelection();
       });
     }
@@ -1567,12 +1619,20 @@ class ZoneMapperCard extends HTMLElement {
         }
       });
 
-    if (restoredEntities && (!this.trackedEntities || this.trackedEntities.length === 0)) {
+    // The backend is authoritative when it has pairs; a selection that came from
+    // local storage is only a stand-in until the backend supplies one.
+    const canAdoptBackend =
+      !this.trackedEntities || this.trackedEntities.length === 0 || this._selectionFromStorage;
+    if (restoredEntities && canAdoptBackend) {
       this.trackedEntities = restoredEntities.filter((p) => p && p.x && p.y);
       // Try to set selected device from first pair
       const first = this.trackedEntities[0];
       const eInfo = this._findEntityInfo(first?.x) || this._findEntityInfo(first?.y);
       if (eInfo) this._selectedDeviceId = eInfo.device_id || null;
+      // Before the registries load the stored device is a guess too; drop it so
+      // _ensureRegistriesLoaded derives the device from the backend's pairs
+      else if (this._selectionFromStorage) this._selectedDeviceId = null;
+      this._persistSelection();
       this._renderEntitySelection();
     }
     if (namesUpdated) {
@@ -2383,12 +2443,24 @@ class ZoneMapperCard extends HTMLElement {
       ]);
       this._devices = Array.isArray(devices) ? devices : [];
       this._allEntities = Array.isArray(entities) ? entities : [];
+      // Forget a device that has since been removed from HA, but keep the entity
+      // pairs: they can be helpers, or belong to a device the user never picked
+      if (
+        this._selectedDeviceId &&
+        !this._devices.some((d) => String(d.id) === String(this._selectedDeviceId))
+      ) {
+        this._selectedDeviceId = null;
+        this._persistSelection();
+      }
       // Try to pick a default device for the location if any entity matches restored pairs
       if (!this._selectedDeviceId && this.trackedEntities && this.trackedEntities.length) {
         const info =
           this._findEntityInfo(this.trackedEntities[0]?.x) ||
           this._findEntityInfo(this.trackedEntities[0]?.y);
-        if (info) this._selectedDeviceId = info.device_id;
+        if (info) {
+          this._selectedDeviceId = info.device_id;
+          this._persistSelection();
+        }
       }
       this._renderEntitySelection();
     } catch {
@@ -2503,7 +2575,12 @@ class ZoneMapperCard extends HTMLElement {
       const nameB = b.name_by_user || b.name || b.id;
       return nameA.localeCompare(nameB);
     });
-    const deviceOptions = devices.map((d) => d.name_by_user || d.name || d.id);
+    // The combobox only reports a value when an option is clicked, so clearing the
+    // device needs an option of its own; the picked device now outlives a reload
+    const deviceOptions = [
+      NO_DEVICE_OPTION,
+      ...devices.map((d) => d.name_by_user || d.name || d.id),
+    ];
 
     let currentDeviceLabel = '';
     if (this._selectedDeviceId) {
@@ -2517,11 +2594,13 @@ class ZoneMapperCard extends HTMLElement {
         if (device.id !== this._selectedDeviceId) {
           this._selectedDeviceId = device.id;
           this._suggestPairsFromDevice(true);
+          this._persistSelection();
           this._renderEntitySelection();
         }
-      } else if (!val) {
+      } else if (!val || val === NO_DEVICE_OPTION) {
         this._selectedDeviceId = null;
         this.trackedEntities = [];
+        this._persistSelection();
         this._renderEntitySelection();
         this.drawGrid();
       }
@@ -2549,6 +2628,7 @@ class ZoneMapperCard extends HTMLElement {
       wrapperX.className = 'combobox-wrapper';
       this._setupCombobox(wrapperX, sensorEntityIds, pair.x, (val) => {
         this.trackedEntities[idx].x = val;
+        this._persistSelection();
         this.drawGrid();
       });
 
@@ -2556,6 +2636,7 @@ class ZoneMapperCard extends HTMLElement {
       wrapperY.className = 'combobox-wrapper';
       this._setupCombobox(wrapperY, sensorEntityIds, pair.y, (val) => {
         this.trackedEntities[idx].y = val;
+        this._persistSelection();
         this.drawGrid();
       });
 
@@ -2563,6 +2644,7 @@ class ZoneMapperCard extends HTMLElement {
       rmBtn.textContent = 'Remove';
       rmBtn.addEventListener('click', () => {
         this.trackedEntities.splice(idx, 1);
+        this._persistSelection();
         this._renderEntitySelection();
         this.drawGrid();
       });
@@ -2573,6 +2655,23 @@ class ZoneMapperCard extends HTMLElement {
       row.appendChild(rmBtn);
       pairsDiv.appendChild(row);
     });
+  }
+
+  _restoreSelection() {
+    // A YAML-driven card owns its entity list; leave it alone
+    if (this.config && this.config.direct_entity) return;
+    const stored = readStoredSelection(this.location);
+    if (!stored) return;
+    if (stored.deviceId) this._selectedDeviceId = stored.deviceId;
+    if (stored.entities.length) this.trackedEntities = stored.entities;
+    // Marks the selection as a local guess the backend is still allowed to replace
+    this._selectionFromStorage = true;
+  }
+
+  _persistSelection() {
+    this._selectionFromStorage = false;
+    if (this.config && this.config.direct_entity) return;
+    writeStoredSelection(this.location, this._selectedDeviceId, this.trackedEntities);
   }
 
   _findEntityInfo(entityId) {
