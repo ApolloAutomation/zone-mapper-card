@@ -816,6 +816,9 @@ class ZoneMapperCard extends HTMLElement {
     if (btnAddPair) {
       btnAddPair.addEventListener('click', () => {
         this.trackedEntities = [...(this.trackedEntities || []), { x: '', y: '' }];
+        // Writes nothing (blank pairs are filtered); keeps every mutation of
+        // trackedEntities on the same path
+        this._persistSelection();
         this._renderEntitySelection();
       });
     }
@@ -1604,6 +1607,9 @@ class ZoneMapperCard extends HTMLElement {
       const first = this.trackedEntities[0];
       const eInfo = this._findEntityInfo(first?.x) || this._findEntityInfo(first?.y);
       if (eInfo) this._selectedDeviceId = eInfo.device_id || null;
+      // Before the registries load the stored device is a guess too; drop it so
+      // _ensureRegistriesLoaded derives the device from the backend's pairs
+      else if (this._selectionFromStorage) this._selectedDeviceId = null;
       this._persistSelection();
       this._renderEntitySelection();
     }
