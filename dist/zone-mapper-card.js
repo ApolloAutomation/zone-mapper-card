@@ -173,6 +173,32 @@ function writeStoredSelection(location, deviceId, entities) {
   }
 }
 
+const LOCK_STORAGE_PREFIX = 'zone-mapper-card.lock';
+
+function lockStorageKey(location) {
+  return `${LOCK_STORAGE_PREFIX}.${slugifyLocation(location)}`;
+}
+
+// Remember the lock toggle per location so a reload keeps the grid locked
+function readStoredLock(location) {
+  try {
+    const raw = window.localStorage.getItem(lockStorageKey(location));
+    if (raw === '1') return true;
+    if (raw === '0') return false;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredLock(location, locked) {
+  try {
+    window.localStorage.setItem(lockStorageKey(location), locked ? '1' : '0');
+  } catch {
+    // Nothing to do; the toggle still applies for the current page load
+  }
+}
+
 class ZoneMapperCard extends HTMLElement {
   static get GRID_MIN_SPACING_PX() {
     return 40;
@@ -229,7 +255,6 @@ class ZoneMapperCard extends HTMLElement {
     return {
       type: 'custom:zone-mapper-card',
       dark_mode: false,
-      start_locked: false,
       show_undo: true,
       unit_display: false,
       // unit_label_size: 18,
@@ -775,6 +800,7 @@ class ZoneMapperCard extends HTMLElement {
       };
       btnLock.addEventListener('click', () => {
         this.isLocked = !this.isLocked;
+        writeStoredLock(this.location, this.isLocked);
         updateLockVisual();
         this._lastLockWarningTs = 0;
         if (this.isLocked) {
@@ -1644,16 +1670,16 @@ class ZoneMapperCard extends HTMLElement {
   }
 
   _applyAutoLock() {
-    // When the user hasn't pinned start_locked in config, lock by default
-    // whenever zones already exist so accidental clicks don't overwrite them.
-    // Only runs once per page load.
+    // An explicit start_locked in config always wins. Otherwise use the last
+    // toggle remembered for this location, and fall back to locking whenever
+    // zones already exist. Only runs once per page load.
     if (this._autoLockApplied) return;
     if (this._lockConfigured) {
       this._autoLockApplied = true;
       return;
     }
-    const hasZones = (this.zones || []).length > 0;
-    this.isLocked = hasZones;
+    const stored = readStoredLock(this.location);
+    this.isLocked = stored !== null ? stored : (this.zones || []).length > 0;
     this._autoLockApplied = true;
     if (typeof this._updateLockVisual === 'function') {
       this._updateLockVisual();

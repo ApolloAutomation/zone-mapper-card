@@ -20,7 +20,7 @@ A custom Lovelace card for Home Assistant that lets you draw 2D detection zones 
 - Helper overlay (device “view cone”) with configurable horizontal FOV and rotation angle
 - Compact UI:
   - Bottom‑left: a single ✎ “Draw” button toggles a vertical menu of modes (▭ Rect, ◯ Ellipse, ⬠ Polygon) that appears above it
-  - Bottom‑right: 🔒 Lock toggle prevents accidental edits (disables drawing and cancels in‑progress)
+  - Bottom‑right: 🔒 Lock toggle prevents accidental edits (disables drawing and cancels in‑progress). The card starts locked whenever zones already exist, and the toggle is remembered per `location` in the browser. Set `start_locked` in YAML to override both.
   - Device and Entity pickers: choose a HA device and select X/Y sensor entity pairs directly from dropdowns; click Apply to persist
   - The picked device and X/Y pairs are remembered per `location`, so reloading the dashboard keeps your selection
 - Multi‑unit support (front‑end only): configure input/grid in mm, cm, m, in, or ft (backend remains millimetres)
@@ -106,7 +106,7 @@ The majority of the configuration and management of zones takes place on the act
 type: custom:zone-mapper-card
 location: Office  # friendly name shown on card; used to build zone entity ids
 dark_mode: false
-start_locked: true # Start in lock mode
+# start_locked: true # optional; forces the starting lock state. Leave it out to start locked whenever zones exist
 
 # Units (front-end only, converts to mm internally)
 input_units: mm     # mm | cm | m | in | ft
