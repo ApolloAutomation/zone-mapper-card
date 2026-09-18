@@ -832,6 +832,7 @@ class ZoneMapperCard extends HTMLElement {
         this._hass.callService('zone_mapper', 'update_zone', {
           location: this.location,
           entities: pairs,
+          input_units: this.inputUnits,
         });
         this.drawGrid();
         this._notify('Entity pairs saved');
@@ -969,6 +970,16 @@ class ZoneMapperCard extends HTMLElement {
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return null;
     return numeric * this._unitMultiplier(unit);
+  }
+
+  _stateValueToMm(state) {
+    if (!state) return null;
+    const rawUnit = state.attributes?.unit_of_measurement;
+    const normalizedUnit = rawUnit === null || rawUnit === undefined
+      ? null
+      : UNIT_ALIASES[String(rawUnit).trim().toLowerCase()];
+    const unit = normalizedUnit || this.inputUnits;
+    return this._convertToMm(state.state, unit);
   }
 
   _mmToUnit(value, unit) {
@@ -1237,6 +1248,7 @@ class ZoneMapperCard extends HTMLElement {
     this._hass.callService('zone_mapper', 'update_zone', {
       location: this.location,
       rotation_deg: this.coneAngleDeg,
+      input_units: this.inputUnits,
     });
   }
 
@@ -1534,6 +1546,7 @@ class ZoneMapperCard extends HTMLElement {
       shape,
       data,
       entities: this.trackedEntities.filter((p) => p.x && p.y),
+      input_units: this.inputUnits,
     });
   }
 
@@ -1693,6 +1706,7 @@ class ZoneMapperCard extends HTMLElement {
             location: this.location,
             zone_id: zoneId,
             name: newName,
+            input_units: this.inputUnits,
           });
         }
         this.renderZoneButtons();
@@ -1752,6 +1766,7 @@ class ZoneMapperCard extends HTMLElement {
         shape: 'none',
         data: null,
         name: newZone.name,
+        input_units: this.inputUnits,
       });
     }
     this.renderZoneButtons();
@@ -1893,18 +1908,15 @@ class ZoneMapperCard extends HTMLElement {
       x: x * cosTheta + y * sinTheta,
       y: -x * sinTheta + y * cosTheta,
     });
-    const multiplier = this.inputUnitMultiplier || 1;
     this.trackedEntities.forEach((pair, idx) => {
       if (!pair.x || !pair.y) return;
       const stateX = this._hass.states[pair.x];
       const stateY = this._hass.states[pair.y];
       if (!stateX || !stateY) return;
-      const xRaw = parseFloat(stateX.state);
-      const yRaw = parseFloat(stateY.state);
-      if (Number.isNaN(xRaw) || Number.isNaN(yRaw)) return;
-      if (Math.abs(xRaw) < 1e-6 && Math.abs(yRaw) < 1e-6) return;
-      const xVal = xRaw * multiplier;
-      const yVal = yRaw * multiplier;
+      const xVal = this._stateValueToMm(stateX);
+      const yVal = this._stateValueToMm(stateY);
+      if (xVal === null || yVal === null) return;
+      if (Math.abs(xVal) < 1e-6 && Math.abs(yVal) < 1e-6) return;
       const rotated = rotatePoint(xVal, yVal);
       this.drawCurrentPosition(rotated.x, rotated.y, colors[idx % colors.length]);
     });
